@@ -1,0 +1,54 @@
+# Optional Java syntax-evidence provider. Does not change the main CBM build.
+# Run from the repository root: make -f Makefile.security test
+CC ?= cc
+PYTHON ?= python3
+BUILD ?= build/security
+SANITIZE ?=
+CPPFLAGS += -Isrc -Isecurity -Iinternal/cbm \
+ -Iinternal/cbm/vendored/ts_runtime/include \
+ -Iinternal/cbm/vendored/ts_runtime/src \
+ -Iinternal/cbm/vendored/common
+CFLAGS ?= -O2
+SEC_FLAGS = -std=c11 -D_DEFAULT_SOURCE -D_GNU_SOURCE -Wall -Wextra -Werror $(CFLAGS) $(SANITIZE)
+CORE = security/facts.c src/foundation/sha256.c src/foundation/secure_random.c
+HEADERS = security/facts.h src/foundation/sha256.h src/foundation/secure_random.h
+VENDOR_DEPS = $(shell find internal/cbm/vendored/ts_runtime internal/cbm/vendored/grammars/java internal/cbm/vendored/common -type f)
+LDLIBS += -lm
+ifeq ($(OS),Windows_NT)
+LDLIBS += -lbcrypt
+endif
+
+.PHONY: all test test-core clean FORCE
+all: $(BUILD)/cbm-security-facts
+
+# Re-evaluate contents on each build; preserve mtime when the identity is unchanged.
+$(BUILD)/identity.h: FORCE
+	@mkdir -p $(BUILD)
+	@$(PYTHON) security/build_id.py > $(BUILD)/identity.sha.tmp
+	@printf '#define SF_BUILD_ID "%s"\n' "$$(cat $(BUILD)/identity.sha.tmp)" > $@.tmp
+	@cmp -s $@.tmp $@ || cp $@.tmp $@
+	@rm -f $@.tmp $(BUILD)/identity.sha.tmp
+
+$(BUILD)/runtime.o: internal/cbm/ts_runtime.c $(VENDOR_DEPS)
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) -std=c11 -D_DEFAULT_SOURCE -D_GNU_SOURCE $(CFLAGS) $(SANITIZE) -c $< -o $@
+
+$(BUILD)/java.o: internal/cbm/grammar_java.c $(VENDOR_DEPS)
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) -std=c11 $(CFLAGS) $(SANITIZE) -c $< -o $@
+
+$(BUILD)/cbm-security-facts: security/main.c security/java.c $(CORE) $(HEADERS) $(BUILD)/identity.h $(BUILD)/runtime.o $(BUILD)/java.o
+	$(CC) $(CPPFLAGS) $(SEC_FLAGS) -include $(BUILD)/identity.h security/main.c security/java.c $(CORE) $(BUILD)/runtime.o $(BUILD)/java.o $(LDLIBS) -o $@
+
+$(BUILD)/test-core: tests/security/test_core.c $(CORE) $(HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) $(SEC_FLAGS) tests/security/test_core.c $(CORE) $(LDLIBS) -o $@
+
+test-core: $(BUILD)/test-core
+	$(BUILD)/test-core
+
+test: all test-core
+	$(PYTHON) tests/security/test_cli.py $(BUILD)/cbm-security-facts
+
+clean:
+	rm -f $(BUILD)/cbm-security-facts $(BUILD)/test-core $(BUILD)/runtime.o $(BUILD)/java.o $(BUILD)/identity.h

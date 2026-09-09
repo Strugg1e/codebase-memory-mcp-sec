@@ -1,0 +1,33 @@
+name: Security facts
+on:
+  pull_request:
+    paths:
+      - 'security/**'
+      - 'tests/security/**'
+      - 'Makefile.security'
+      - 'internal/cbm/grammar_java.c'
+      - 'internal/cbm/ts_runtime.c'
+      - 'internal/cbm/vendored/**'
+      - 'src/foundation/sha256.*'
+      - 'src/foundation/secure_random.*'
+      - '.github/workflows/security-facts.yml'
+permissions:
+  contents: read
+concurrency:
+  group: security-facts-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  java-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Build and test the real Java parser with memory checks
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: >-
+          make -f Makefile.security test CC=clang BUILD=build/security-asan
+          CFLAGS='-O1 -g' SANITIZE='-fsanitize=address,undefined -fno-omit-frame-pointer'
