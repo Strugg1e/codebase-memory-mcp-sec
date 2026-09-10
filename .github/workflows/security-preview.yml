@@ -1,0 +1,139 @@
+# Separate, explicitly requested CBM Sec preview; never the upstream CBM release.
+name: CBM Sec preview
+on:
+  push:
+    branches: ['release/cbm-sec-v0.6.0-preview.1']
+permissions:
+  contents: read
+concurrency:
+  group: cbm-sec-v0.6.0-preview.1
+  cancel-in-progress: false
+env:
+  TAG: cbm-sec-v0.6.0-preview.1
+jobs:
+  verify-package:
+    if: github.repository == 'Strugg1e/codebase-memory-mcp-sec'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Test all security tools with Clang memory checks
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/release-logs
+          make -j2 -f Makefile.security test CC=clang BUILD=build/release-asan CFLAGS='-O1 -g' SANITIZE='-fsanitize=address,undefined -fno-omit-frame-pointer' 2>&1 | tee build/release-logs/clang.log
+      - name: Test all security tools with GCC
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -j2 -f Makefile.security test CC=gcc BUILD=build/release-gcc 2>&1 | tee build/release-logs/gcc.log
+      - name: Audit existing safety and vendored integrity rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/security-audit.sh
+          bash scripts/security-vendored.sh
+      - name: Package only tested binaries and labelled examples
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          mkdir -p dist build/preview-stage
+          pkg="build/preview-stage/$TAG-linux-x86_64"
+          mkdir -p "$pkg/bin" "$pkg/docs" "$pkg/licenses"
+          cp build/release-gcc/cbm-security-facts build/release-gcc/cbm-security-mcp "$pkg/bin/"
+          cp security/demo_flow.py security/pack_snapshot.py "$pkg/"
+          cp SECURITY_PREVIEW.md "$pkg/README.md"
+          cp SECURITY_FACTS.md SECURITY_MCP.md SECURITY_OPERATIONS.md SECURITY_FLOW.md "$pkg/docs/"
+          cp LICENSE THIRD_PARTY.md "$pkg/"
+          cp -R build/release-logs "$pkg/test-logs"
+          printf '%s\n' "$GITHUB_SHA" > "$pkg/COMMIT.txt"
+          python3 "$pkg/demo_flow.py" --mcp "$pkg/bin/cbm-security-mcp" > dist/demo-flow-result.json
+          python3 - "$pkg" <<'PY'
+          import json, os, platform, re, shutil, subprocess, sys
+          from pathlib import Path
+          pkg = Path(sys.argv[1])
+          roots = [Path('internal/cbm/vendored/ts_runtime'), Path('internal/cbm/vendored/common'), Path('vendored/yyjson')]
+          roots += [Path('internal/cbm/vendored/grammars') / x for x in ('java','python','javascript','typescript','tsx','go','xml')]
+          for root in roots:
+              for path in root.rglob('*'):
+                  if path.is_file() and path.name.upper().startswith(('LICENSE','NOTICE','COPYING')):
+                      target = pkg / 'licenses' / path
+                      target.parent.mkdir(parents=True, exist_ok=True)
+                      shutil.copyfile(path, target)
+          version = subprocess.check_output([str(pkg / 'bin/cbm-security-facts'), '--version'], text=True).strip().split()
+          if len(version) != 3 or version[1] != '0.6.0':
+              raise SystemExit('Unexpected analyzer version')
+          info = {'release':os.environ['TAG'], 'commit':os.environ['GITHUB_SHA'], 'analyzer_version':version[1], 'build_id':version[2],
+                  'platform':platform.platform(), 'architecture':platform.machine(), 'libc':platform.libc_ver(),
+                  'compiler':subprocess.check_output(['gcc','--version'],text=True).splitlines()[0],
+                  'workflow_run':os.environ['GITHUB_SERVER_URL']+'/'+os.environ['GITHUB_REPOSITORY']+'/actions/runs/'+os.environ['GITHUB_RUN_ID'],
+                  'scope':'standalone_security_tools_preview', 'upstream_full_regression':'not_asserted', 'dco_certification':'not_asserted'}
+          tests = {'commit':os.environ['GITHUB_SHA'], 'suite':'tests/security/test_*.py', 'environments':{}}
+          expected_suites = len(list(Path('tests/security').glob('test_*.py')))
+          for compiler in ('clang','gcc'):
+              log = Path('build/release-logs/'+compiler+'.log').read_text()
+              counts = [int(n) for n in re.findall(r'^Ran (\d+) tests? in ', log, re.M)]
+              if len(counts) != expected_suites or len(re.findall(r'^OK$',log,re.M)) != expected_suites:
+                  raise SystemExit('Incomplete Python test suite log')
+              if 'security core: input validation' not in log:
+                  raise SystemExit('Missing C core test record')
+              tests['environments'][compiler] = {'status':'passed','python_tests':sum(counts),'python_suites':len(counts),'c_core':'passed'}
+          for name, value in (('BUILD_INFO.json',info),('TEST_RESULTS.json',tests)):
+              text = json.dumps(value, ensure_ascii=False, indent=2)+'\n'
+              Path('dist',name).write_text(text)
+              (pkg/name).write_text(text)
+          shutil.copyfile('dist/demo-flow-result.json',pkg/'demo-flow-result.json')
+          PY
+          tar -C build/preview-stage -czf "dist/$TAG-linux-x86_64.tar.gz" "$TAG-linux-x86_64"
+          git archive --format=tar --prefix="$TAG-source/" "$GITHUB_SHA" | gzip > "dist/$TAG-source.tar.gz"
+          cp SECURITY_PREVIEW.md dist/RELEASE_NOTES.md
+          printf '\n发布提交：`%s`\n构建与测试：%s/%s/actions/runs/%s\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" >> dist/RELEASE_NOTES.md
+          (cd dist && sha256sum *.tar.gz BUILD_INFO.json TEST_RESULTS.json demo-flow-result.json > SHA256SUMS)
+          mkdir -p build/package-check
+          tar -xzf "dist/$TAG-linux-x86_64.tar.gz" -C build/package-check
+          python3 "build/package-check/$TAG-linux-x86_64/demo_flow.py" --mcp "build/package-check/$TAG-linux-x86_64/bin/cbm-security-mcp" > build/release-logs/packaged-demo.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cbm-sec-preview-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+  publish-preview:
+    needs: verify-package
+    if: github.repository == 'Strugg1e/codebase-memory-mcp-sec' && needs.verify-package.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: cbm-sec-preview-${{ github.sha }}
+          path: dist
+      - name: Create exact tag and draft, verify downloaded assets, then publish preview
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -c SHA256SUMS)
+          # Create only. An existing tag causes an error; never retarget it.
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$TAG" -f "sha=$GITHUB_SHA"
+          actual="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.sha')"
+          test "$actual" = "$GITHUB_SHA"
+          # Existing releases are never edited or replaced by this creation step.
+          gh release create "$TAG" dist/*.tar.gz dist/BUILD_INFO.json dist/TEST_RESULTS.json dist/demo-flow-result.json dist/SHA256SUMS --repo "$GITHUB_REPOSITORY" --verify-tag --target "$GITHUB_SHA" --title 'CBM Sec 0.6.0 Preview 1 — 有限多跳参数取证' --notes-file dist/RELEASE_NOTES.md --draft --prerelease --latest=false
+          mkdir verify
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir verify
+          cmp dist/SHA256SUMS verify/SHA256SUMS
+          (cd verify && sha256sum -c SHA256SUMS)
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,isDraft,isPrerelease,tagName
