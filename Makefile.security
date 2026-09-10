@@ -58,6 +58,7 @@ test-core: $(BUILD)/test-core
 test: all test-core
 	$(PYTHON) tests/security/test_cli.py $(BUILD)/cbm-security-facts
 	$(PYTHON) tests/security/test_multilang.py $(BUILD)/cbm-security-facts
+	$(PYTHON) tests/security/test_hardening.py $(BUILD)/cbm-security-facts
 
 clean:
 	rm -f $(BUILD)/cbm-security-facts $(BUILD)/test-core $(OBJECTS) $(BUILD)/identity.h $(BUILD)/flags

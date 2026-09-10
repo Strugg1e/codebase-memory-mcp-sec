@@ -4,9 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* These models describe declarations, not runtime reachability or protection.
- * Explicit imports and local constructor bindings are required. Ambiguous
- * rebindings suppress the model across the file rather than guessing a target. */
+/* Models describe source declarations, never runtime protection. Unknown imports
+ * still participate in name binding: ignoring them can resurrect a stale model. */
 typedef struct {
     char local[128], canonical[256];
     sf_span name, evidence, initialization, scope;
@@ -19,7 +18,7 @@ struct sf_models {
     TSNode root;
     binding bindings[SF_MAX_BINDINGS];
     size_t count;
-    bool usable, require_shadowed;
+    bool usable, require_shadowed, ambiguous_import;
 };
 
 static bool same_span(sf_span a, sf_span b) { return a.start == b.start && a.end == b.end; }
@@ -47,25 +46,60 @@ static bool join(char *out, size_t size, const char *a, const char *b) {
     int n = snprintf(out, size, "%s%s%s", a, b[0] ? "." : "", b);
     return n >= 0 && (size_t)n < size;
 }
+static bool keyword(TSNode node, const char *word) {
+    /* Direct anonymous tokens only: an identifier literally named 'type' is not
+     * the TypeScript type-only modifier. Comments and nested expressions do not count. */
+    for (uint32_t i = 0; i < ts_node_child_count(node); i++) {
+        TSNode child = ts_node_child(node, i);
+        if (!ts_node_is_named(child) && sf_node_is(child, word)) return true;
+    }
+    return false;
+}
+static sf_span local_scope(sf_models *m, TSNode node) {
+    TSNode parent = ts_node_parent(node);
+    for (unsigned depth = 0; !ts_node_is_null(parent) && depth < 128; depth++, parent = ts_node_parent(parent)) {
+        if (sf_node_is(parent, "block") || sf_node_is(parent, "statement_block") || sf_node_is(parent, "class_body"))
+            return sf_location(parent);
+    }
+    if (!ts_node_is_null(parent)) {
+        m->doc->framework_bindings_limited = true;
+        return (sf_span){0};
+    }
+    return sf_location(m->root);
+}
 static binding *add_binding(sf_models *m, TSNode name, const char *canonical, TSNode evidence) {
     char local[128];
-    if (!sf_node_text(m->doc, name, local, sizeof(local)) || !local[0] || strcmp(local, "_") == 0 || strcmp(local, ".") == 0) return NULL;
-    if (strlen(canonical) >= sizeof(m->bindings[0].canonical)) return NULL;
+    if (!sf_node_text(m->doc, name, local, sizeof(local)) || !local[0]) {
+        m->doc->framework_bindings_limited = true; return NULL;
+    }
+    if (strcmp(local, "_") == 0) return NULL;
+    if (strcmp(local, ".") == 0) { m->ambiguous_import = true; return NULL; }
+    if (strlen(canonical) >= sizeof(m->bindings[0].canonical)) {
+        m->doc->framework_bindings_limited = true; return NULL;
+    }
+    if (strcmp(local, "require") == 0) m->require_shadowed = true;
     sf_span position = sf_location(name);
     for (size_t i = 0; i < m->count; i++)
         if (same_span(m->bindings[i].name, position)) return &m->bindings[i];
     if (m->count >= SF_MAX_BINDINGS) { m->doc->framework_bindings_limited = true; return NULL; }
     binding *b = &m->bindings[m->count++]; b->parent = -1;
     strcpy(b->local, local); strcpy(b->canonical, canonical);
-    b->name = position; b->evidence = sf_location(evidence); b->scope = sf_location(m->root);
-    for (size_t i = 0; i + 1 < m->count; i++) if (strcmp(m->bindings[i].local, local) == 0) { b->invalid = true; m->bindings[i].invalid = true; }
+    b->name = position; b->evidence = sf_location(evidence); b->scope = local_scope(m, evidence);
+    /* Python imports execute in source order. This is deliberately more
+     * conservative than a complete interpreter for late-bound function bodies. */
+    if (strcmp(m->doc->language, "python") == 0) {
+        b->has_initialization = true; b->initialization = sf_location(evidence);
+    }
+    for (size_t i = 0; i + 1 < m->count; i++) if (strcmp(m->bindings[i].local, local) == 0) {
+        b->invalid = true; m->bindings[i].invalid = true;
+    }
     return b;
 }
 static binding *lookup(sf_models *m, const char *name, sf_span site) {
     for (size_t i = 0; i < m->count; i++) {
         binding *b = &m->bindings[i];
         if (!b->invalid && strcmp(name, b->local) == 0 && contains(b->scope, site) &&
-            (!b->has_initialization || b->initialization.start < site.start)) return b;
+            (!b->has_initialization || b->initialization.end <= site.start)) return b;
     }
     return NULL;
 }
@@ -77,7 +111,10 @@ static binding *resolve(sf_models *m, TSNode target, char *canonical, size_t cap
     if (!length || length >= sizeof(local)) return NULL;
     memcpy(local, value, length); local[length] = 0;
     binding *b = lookup(m, local, sf_location(target));
-    if (!b || !join(canonical, capacity, b->canonical, dot ? dot + 1 : "")) return NULL;
+    /* An instance member must be direct. app.database.get is not app.get.
+     * Module namespaces may contain dots, but each model must match the full name. */
+    if (!b || (b->instance && (!dot || strchr(dot + 1, '.'))) ||
+        !join(canonical, capacity, b->canonical, dot ? dot + 1 : "")) return NULL;
     return b;
 }
 static TSNode argument(TSNode call, uint32_t index) {
@@ -95,7 +132,23 @@ static TSNode argument(TSNode call, uint32_t index) {
     ts_tree_cursor_delete(&cursor);
     return found;
 }
-
+static TSNode python_argument(sf_models *m, TSNode call, uint32_t index, const char *key, const char *alternate) {
+    TSNode first = argument(call, index);
+    if (!ts_node_is_null(first) && !sf_node_is(first, "keyword_argument")) return first;
+    TSNode args = sf_field(call, "arguments"), found = (TSNode){0};
+    if (ts_node_is_null(args)) return found;
+    TSTreeCursor cursor = ts_tree_cursor_new(args);
+    if (ts_tree_cursor_goto_first_child(&cursor)) do {
+        TSNode child = ts_tree_cursor_current_node(&cursor);
+        char name[64];
+        if (sf_node_is(child, "keyword_argument") && sf_node_text(m->doc, sf_field(child, "name"), name, sizeof(name)) &&
+            (strcmp(name, key) == 0 || (alternate && strcmp(name, alternate) == 0))) {
+            found = sf_field(child, "value"); break;
+        }
+    } while (ts_tree_cursor_goto_next_sibling(&cursor));
+    ts_tree_cursor_delete(&cursor);
+    return found;
+}
 static TSNode annotation_path(sf_models *m, TSNode node) {
     TSNode args = sf_field(node, "arguments");
     for (uint32_t i = 0; !ts_node_is_null(args) && i < ts_node_named_child_count(args); i++) {
@@ -108,43 +161,32 @@ static TSNode annotation_path(sf_models *m, TSNode node) {
     }
     return (TSNode){0};
 }
-static TSNode route_path(sf_models *m, TSNode call) {
-    TSNode first = argument(call, 0);
-    if (!sf_node_is(first, "keyword_argument")) return first;
-    TSNode args = sf_field(call, "arguments");
-    for (uint32_t i = 0; i < ts_node_named_child_count(args); i++) {
-        TSNode child = ts_node_named_child(args, i);
-        char key[64];
-        if (sf_node_is(child, "keyword_argument") && sf_node_text(m->doc, sf_field(child, "name"), key, sizeof(key)) &&
-            (strcmp(key, "path") == 0 || strcmp(key, "rule") == 0)) return sf_field(child, "value");
-    }
-    return (TSNode){0};
-}
 static void java_import(sf_models *m, TSNode node) {
     TSNode name = ts_node_named_child(node, 0);
     char canonical[256];
-    if (!sf_node_text(m->doc, name, canonical, sizeof(canonical)) || !package_allowed(canonical)) return;
-    /* Wildcards and static imports do not prove the annotation's identity. */
+    if (!sf_node_text(m->doc, name, canonical, sizeof(canonical))) { m->ambiguous_import = true; return; }
     for (uint32_t i = 0; i < ts_node_child_count(node); i++)
         if (sf_node_is(ts_node_child(node, i), "asterisk") || sf_node_is(ts_node_child(node, i), "static")) return;
     TSNode leaf = sf_field(name, "name");
-    if (ts_node_is_null(leaf)) leaf = ts_node_named_child(name, ts_node_named_child_count(name) - 1);
+    uint32_t count = ts_node_named_child_count(name);
+    if (ts_node_is_null(leaf) && count) leaf = ts_node_named_child(name, count - 1);
     if (identifier(leaf)) add_binding(m, leaf, canonical, node);
 }
 static void python_import(sf_models *m, TSNode node) {
     bool from = sf_node_is(node, "import_from_statement");
     TSNode module = sf_field(node, "module_name");
     char package[256] = "";
-    if (from && (!sf_node_text(m->doc, module, package, sizeof(package)) || !package_allowed(package))) return;
+    if (from && !sf_node_text(m->doc, module, package, sizeof(package))) { m->ambiguous_import = true; return; }
     for (uint32_t i = 0; i < ts_node_named_child_count(node); i++) {
         TSNode item = ts_node_named_child(node, i);
+        if (sf_node_is(item, "wildcard_import")) { m->ambiguous_import = true; continue; }
         if (!ts_node_is_null(module) && same_span(sf_location(item), sf_location(module))) continue;
         TSNode name = item, alias = (TSNode){0};
         if (sf_node_is(item, "aliased_import")) { name = sf_field(item, "name"); alias = sf_field(item, "alias"); }
         char imported[256], canonical[256];
-        if (!sf_node_text(m->doc, name, imported, sizeof(imported))) continue;
-        if (from) { if (!join(canonical, sizeof(canonical), package, imported)) continue; }
-        else { if (!package_allowed(imported)) continue; strcpy(canonical, imported); }
+        if (!sf_node_text(m->doc, name, imported, sizeof(imported))) { m->ambiguous_import = true; continue; }
+        if (from) { if (!join(canonical, sizeof(canonical), package, imported)) { m->ambiguous_import = true; continue; } }
+        else strcpy(canonical, imported);
         if (ts_node_is_null(alias)) {
             alias = name;
             if (!from && strchr(imported, '.')) {
@@ -156,18 +198,25 @@ static void python_import(sf_models *m, TSNode node) {
     }
 }
 static void js_import_clause(sf_models *m, TSNode clause, const char *package, TSNode evidence) {
+    bool type_only = keyword(evidence, "type");
     for (uint32_t i = 0; i < ts_node_named_child_count(clause); i++) {
         TSNode item = ts_node_named_child(clause, i);
-        if (identifier(item)) add_binding(m, item, package, evidence);
-        else if (sf_node_is(item, "namespace_import")) add_binding(m, ts_node_named_child(item, 0), package, evidence);
+        binding *b = NULL;
+        if (identifier(item)) b = add_binding(m, item, package, evidence);
+        else if (sf_node_is(item, "namespace_import")) b = add_binding(m, ts_node_named_child(item, 0), package, evidence);
         else if (sf_node_is(item, "named_imports")) {
             for (uint32_t j = 0; j < ts_node_named_child_count(item); j++) {
                 TSNode spec = ts_node_named_child(item, j), name = sf_field(spec, "name"), alias = sf_field(spec, "alias");
+                if (!sf_node_is(spec, "import_specifier")) continue;
                 char imported[128], canonical[256];
-                if (sf_node_text(m->doc, name, imported, sizeof(imported)) && join(canonical, sizeof(canonical), package, imported))
-                    add_binding(m, ts_node_is_null(alias) ? name : alias, canonical, evidence);
+                if (!sf_node_text(m->doc, name, imported, sizeof(imported)) || !join(canonical, sizeof(canonical), package, imported)) {
+                    m->ambiguous_import = true; continue;
+                }
+                binding *named = add_binding(m, ts_node_is_null(alias) ? name : alias, canonical, evidence);
+                if (named && (type_only || keyword(spec, "type"))) named->invalid = true;
             }
         }
+        if (b && type_only) b->invalid = true;
     }
 }
 static bool imports(TSNode node, void *opaque) {
@@ -177,36 +226,34 @@ static bool imports(TSNode node, void *opaque) {
     else if (strcmp(lang, "python") == 0 && (sf_node_is(node, "import_statement") || sf_node_is(node, "import_from_statement"))) python_import(m, node);
     else if (strcmp(lang, "go") == 0 && sf_node_is(node, "import_spec")) {
         char package[256]; TSNode path = sf_field(node, "path"), name = sf_field(node, "name");
-        if (literal(m, path, package, sizeof(package)) && package_allowed(package)) {
-            if (!ts_node_is_null(name)) add_binding(m, name, package, node);
+        if (!literal(m, path, package, sizeof(package))) { m->ambiguous_import = true; return true; }
+        if (!ts_node_is_null(name)) add_binding(m, name, package, node);
+        else if (package_allowed(package)) {
+            const char *slash = strrchr(package, '/'); const char *leaf = slash ? slash + 1 : package;
+            size_t leaf_len = strlen(leaf);
+            if (leaf_len >= sizeof(m->bindings[0].local) || m->count >= SF_MAX_BINDINGS) m->doc->framework_bindings_limited = true;
             else {
-                const char *slash = strrchr(package, '/'); const char *leaf = slash ? slash + 1 : package;
-                size_t leaf_len = strlen(leaf);
-                if (leaf_len >= sizeof(m->bindings[0].local)) return true;
-                /* The default package spelling is a source slice inside the literal. */
-                if (m->count >= SF_MAX_BINDINGS) m->doc->framework_bindings_limited = true;
-                else {
-                    binding *b = &m->bindings[m->count++]; b->parent = -1;
-                    memcpy(b->local, leaf, leaf_len + 1); strcpy(b->canonical, package);
-                    b->name = sf_location(path); b->evidence = sf_location(node); b->scope = sf_location(m->root);
-                    for (size_t k = 0; k + 1 < m->count; k++) if (strcmp(m->bindings[k].local, b->local) == 0) { b->invalid = true; m->bindings[k].invalid = true; }
-                }
+                binding *b = &m->bindings[m->count++]; b->parent = -1;
+                memcpy(b->local, leaf, leaf_len + 1); strcpy(b->canonical, package);
+                b->name = sf_location(path); b->evidence = sf_location(node); b->scope = sf_location(m->root);
+                for (size_t k = 0; k + 1 < m->count; k++) if (strcmp(m->bindings[k].local, b->local) == 0) { b->invalid = true; m->bindings[k].invalid = true; }
             }
         }
     } else if (sf_node_is(node, "import_statement") && strcmp(lang, "python") != 0) {
         char package[256];
-        if (literal(m, sf_field(node, "source"), package, sizeof(package)) && package_allowed(package))
-            for (uint32_t i = 0; i < ts_node_named_child_count(node); i++) {
-                TSNode clause = ts_node_named_child(node, i);
-                if (sf_node_is(clause, "import_clause")) js_import_clause(m, clause, package, node);
-            }
+        if (!literal(m, sf_field(node, "source"), package, sizeof(package))) { m->ambiguous_import = true; return true; }
+        for (uint32_t i = 0; i < ts_node_named_child_count(node); i++) {
+            TSNode clause = ts_node_named_child(node, i);
+            if (sf_node_is(clause, "import_clause")) js_import_clause(m, clause, package, node);
+        }
     } else if (sf_node_is(node, "variable_declarator") && strcmp(lang, "java") != 0) {
         TSNode value = sf_field(node, "value"), name = sf_field(node, "name");
         char target[128], package[256];
         if (identifier(name) && sf_node_is(value, "call_expression") &&
             sf_node_text(m->doc, sf_call_target(value), target, sizeof(target)) && strcmp(target, "require") == 0 &&
-            literal(m, argument(value, 0), package, sizeof(package)) && strcmp(package, "express") == 0 && ts_node_is_null(argument(value, 1))) {
-            binding *b = add_binding(m, name, package, node); if (b) b->commonjs = true;
+            literal(m, argument(value, 0), package, sizeof(package)) && ts_node_is_null(argument(value, 1))) {
+            binding *b = add_binding(m, name, package, node);
+            if (b) { b->commonjs = true; b->has_initialization = true; b->initialization = sf_location(node); }
         }
     }
     return !m->doc->framework_bindings_limited;
@@ -236,22 +283,15 @@ static bool factories(TSNode node, void *opaque) {
     binding *owner = resolve(m, sf_call_target(value), canonical, sizeof(canonical));
     const char *instance = owner ? instance_type(canonical) : NULL;
     if (!instance) return true;
-    char saved[256];
-    size_t instance_len = strlen(instance);
+    char saved[256]; size_t instance_len = strlen(instance);
     if (instance_len >= sizeof(saved)) return true;
     memcpy(saved, instance, instance_len + 1);
     sf_span import_evidence = owner->evidence;
     int parent_index = (int)(owner - m->bindings);
     binding *b = add_binding(m, name, saved, node);
     if (b) {
-        b->parent = parent_index; b->instance = true; b->has_initialization = true; b->initialization = sf_location(node); b->evidence = import_evidence;
-        TSNode parent = ts_node_parent(node);
-        unsigned depth = 0;
-        while (!ts_node_is_null(parent) && depth++ < 128) {
-            if (sf_node_is(parent, "block") || sf_node_is(parent, "statement_block")) { b->scope = sf_location(parent); break; }
-            parent = ts_node_parent(parent);
-        }
-        if (!ts_node_is_null(parent) && depth >= 128) b->invalid = true;
+        b->parent = parent_index; b->instance = true; b->has_initialization = true;
+        b->initialization = sf_location(node); b->evidence = import_evidence;
     }
     return !m->doc->framework_bindings_limited;
 }
@@ -262,31 +302,63 @@ static void invalidate_name(sf_models *m, TSNode name) {
     for (size_t i = 0; i < m->count; i++)
         if (strcmp(m->bindings[i].local, value) == 0 && !same_span(m->bindings[i].name, sf_location(name))) m->bindings[i].invalid = true;
 }
+static bool invalidate_pattern_node(TSNode node, void *opaque) {
+    if (identifier(node) || sf_node_is(node, "shorthand_property_identifier_pattern")) {
+        sf_models *m = opaque;
+        char name[128];
+        if (sf_node_text(m->doc, node, name, sizeof(name))) {
+            if (strcmp(name, "require") == 0) m->require_shadowed = true;
+            for (size_t i = 0; i < m->count; i++) if (strcmp(m->bindings[i].local, name) == 0) m->bindings[i].invalid = true;
+        }
+    }
+    return true;
+}
+static void invalidate_pattern(sf_models *m, TSNode node) {
+    if (ts_node_is_null(node)) return;
+    if (identifier(node)) { invalidate_name(m, node); return; }
+    /* Only called for binding positions. Field writes, arbitrary expressions
+     * and dynamic object mutation remain outside the model. */
+    if (sf_node_is(node, "pattern_list") || sf_node_is(node, "tuple_pattern") || sf_node_is(node, "list_pattern") ||
+        sf_node_is(node, "object_pattern") || sf_node_is(node, "array_pattern") || sf_node_is(node, "expression_list")) {
+        size_t visited;
+        if (!sf_walk(node, invalidate_pattern_node, m, &visited)) m->doc->framework_bindings_limited = true;
+    }
+}
 static bool collisions(TSNode node, void *opaque) {
     sf_models *m = opaque;
     TSNode value, name = assignment_name(node, &value);
-    if (!ts_node_is_null(name)) invalidate_name(m, name);
-    static const char *const kinds[] = {"function_definition", "class_definition", "function_declaration", "class_declaration", "annotation_type_declaration", "formal_parameter", "parameter_declaration", "default_parameter", "typed_default_parameter", "type_spec", "catch_formal_parameter"};
+    if (!ts_node_is_null(name)) invalidate_pattern(m, name);
+    static const char *const kinds[] = {"function_definition", "class_definition", "function_declaration", "class_declaration", "annotation_type_declaration", "formal_parameter", "parameter_declaration", "default_parameter", "typed_default_parameter", "type_spec", "catch_formal_parameter", "named_expression"};
     for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) if (sf_node_is(node, kinds[i])) invalidate_name(m, sf_field(node, "name"));
-    if (sf_node_is(node, "required_parameter") || sf_node_is(node, "optional_parameter")) invalidate_name(m, sf_field(node, "pattern"));
+    if (sf_node_is(node, "required_parameter") || sf_node_is(node, "optional_parameter")) invalidate_pattern(m, sf_field(node, "pattern"));
+    if (sf_node_is(node, "for_statement") || sf_node_is(node, "for_in_statement")) invalidate_pattern(m, sf_field(node, "left"));
+    if (sf_node_is(node, "as_pattern")) invalidate_pattern(m, sf_field(node, "alias"));
     TSNode parent = ts_node_parent(node);
     if (identifier(node) && sf_node_is(parent, "arrow_function") && same_span(sf_location(node), sf_location(sf_field(parent, "parameter")))) invalidate_name(m, node);
-    if (identifier(node) && (sf_node_is(parent, "parameters") || sf_node_is(parent, "formal_parameters") || sf_node_is(parent, "lambda_parameters") || sf_node_is(parent, "typed_parameter") || sf_node_is(parent, "rest_pattern") || sf_node_is(parent, "list_splat_pattern") || sf_node_is(parent, "dictionary_splat_pattern"))) invalidate_name(m, node);
-    return true;
+    if (identifier(node) && (sf_node_is(parent, "parameters") || sf_node_is(parent, "formal_parameters") || sf_node_is(parent, "lambda_parameters") || sf_node_is(parent, "typed_parameter") || sf_node_is(parent, "rest_pattern") || sf_node_is(parent, "list_splat_pattern") || sf_node_is(parent, "dictionary_splat_pattern") || sf_node_is(parent, "delete_statement") || sf_node_is(parent, "global_statement") || sf_node_is(parent, "nonlocal_statement"))) invalidate_name(m, node);
+    return !m->doc->framework_bindings_limited;
 }
-
+static bool declaration_file(const char *path) {
+    const char *const suffixes[] = {".pyi", ".d.ts", ".d.mts", ".d.cts"};
+    size_t length = strlen(path);
+    for (size_t i = 0; i < sizeof(suffixes) / sizeof(suffixes[0]); i++) {
+        size_t n = strlen(suffixes[i]);
+        if (length >= n && strcmp(path + length - n, suffixes[i]) == 0) return true;
+    }
+    return false;
+}
 sf_models *sf_models_new(sf_document *doc, TSNode root) {
     sf_models *m = calloc(1, sizeof(*m));
     if (!m) return NULL;
     m->doc = doc; m->root = root;
     size_t visited;
-    m->usable = !doc->parse_has_error && sf_walk(root, imports, m, &visited) &&
-                sf_walk(root, factories, m, &visited) && sf_walk(root, collisions, m, &visited);
+    m->usable = !doc->parse_has_error && !declaration_file(doc->path) &&
+                sf_walk(root, imports, m, &visited) && !m->ambiguous_import &&
+                sf_walk(root, factories, m, &visited) && sf_walk(root, collisions, m, &visited) &&
+                !doc->framework_bindings_limited;
     if (m->require_shadowed) for (size_t i = 0; i < m->count; i++) if (m->bindings[i].commonjs) m->bindings[i].invalid = true;
-    /* A constructor derived from a later-invalidated import must not survive. */
-    for (size_t i = 0; i < m->count; i++) if (m->bindings[i].instance)
-        for (size_t j = 0; j < m->count; j++)
-            if (m->bindings[j].invalid && !m->bindings[j].instance && same_span(m->bindings[i].evidence, m->bindings[j].evidence)) m->bindings[i].invalid = true;
+    /* Dependencies point backwards. Invalidated constructors never leave live
+     * derived router bindings behind. No fixed-point guessing is needed. */
     for (size_t i = 0; i < m->count; i++) {
         int parent = m->bindings[i].parent;
         if (parent >= 0 && (size_t)parent < i && m->bindings[parent].invalid) m->bindings[i].invalid = true;
@@ -296,21 +368,21 @@ sf_models *sf_models_new(sf_document *doc, TSNode root) {
 }
 void sf_models_free(sf_models *m) { free(m); }
 
-static const char *http_method(const char *name) {
+static const char *http_method(const char *name, bool uppercase) {
     static const char *const lower[] = {"get", "post", "put", "patch", "delete", "head", "options", "all"};
     static const char *const upper[] = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "ALL"};
-    for (size_t i = 0; i < sizeof(lower) / sizeof(lower[0]); i++) if (strcmp(name, lower[i]) == 0 || strcmp(name, upper[i]) == 0) return upper[i];
+    for (size_t i = 0; i < sizeof(lower) / sizeof(lower[0]); i++)
+        if (strcmp(name, uppercase ? upper[i] : lower[i]) == 0) return upper[i];
     return NULL;
 }
 static bool decorated(TSNode node) {
-    for (unsigned i = 0; i < 4 && !ts_node_is_null(node); i++, node = ts_node_parent(node)) if (sf_node_is(node, "decorator")) return true;
-    return false;
+    return sf_node_is(node, "decorator") || sf_node_is(ts_node_parent(node), "decorator");
 }
 static void mark(sf_fact *f, binding *b, const char *framework, const char *role, const char *rule) {
     f->framework = framework; f->role = role; f->rule_id = rule;
     if (b) {
         f->has_import_evidence = true; f->import_evidence = b->evidence;
-        f->has_binding_evidence = b->has_initialization; f->binding_evidence = b->initialization;
+        f->has_binding_evidence = b->instance && b->has_initialization; f->binding_evidence = b->initialization;
     }
 }
 static void path_and_handler(sf_fact *f, TSNode path, TSNode handler) {
@@ -320,9 +392,7 @@ static void path_and_handler(sf_fact *f, TSNode path, TSNode handler) {
 static void annotation_model(sf_models *m, sf_fact *f, TSNode node) {
     char canonical[384]; TSNode name = sf_field(node, "name");
     binding *b = resolve(m, name, canonical, sizeof(canonical));
-    if (!b) {
-        if (!sf_node_text(m->doc, name, canonical, sizeof(canonical)) || !package_allowed(canonical)) return;
-    }
+    if (!b && (!sf_node_text(m->doc, name, canonical, sizeof(canonical)) || !package_allowed(canonical))) return;
     static const char *const routes[] = {"GetMapping", "PostMapping", "PutMapping", "PatchMapping", "DeleteMapping", "RequestMapping"};
     static const char *const methods[] = {"GET", "POST", "PUT", "PATCH", "DELETE", "DECLARED_IN_ARGUMENTS"};
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
@@ -351,7 +421,7 @@ void sf_models_apply(sf_models *m, sf_fact *f, TSNode node) {
     if (!m || !m->usable || f->syntax_has_error) return;
     if (strcmp(f->kind, "annotation") == 0) { annotation_model(m, f, node); return; }
     bool decorator = strcmp(f->kind, "decorator") == 0;
-    if (strcmp(f->kind, "call_site") != 0 && !decorator) return;
+    if ((strcmp(f->kind, "call_site") != 0 && !decorator) || f->has_argument_expansion) return;
     TSNode target = decorator ? ts_node_named_child(node, 0) : sf_call_target(node);
     if (decorator && (sf_node_is(target, "call") || sf_node_is(target, "call_expression"))) return;
     char canonical[384]; binding *b = resolve(m, target, canonical, sizeof(canonical));
@@ -360,35 +430,42 @@ void sf_models_apply(sf_models *m, sf_fact *f, TSNode node) {
     if (!b->instance && (strcmp(canonical, "fastapi.Depends") == 0 || strcmp(canonical, "fastapi.Security") == 0)) {
         mark(f, b, "fastapi", strcmp(member, "Depends") == 0 ? "dependency_declaration" : "security_dependency_declaration", "fastapi.dependency.v1"); return;
     }
-    if (!b->instance && strncmp(canonical, "fastapi.", 8) == 0) {
+    if (!b->instance) {
         static const char *const inputs[] = {"Query", "Path", "Body", "Header", "Cookie", "Form", "File"};
-        for (size_t i = 0; i < sizeof(inputs) / sizeof(inputs[0]); i++) if (strcmp(member, inputs[i]) == 0) {
-            mark(f, b, "fastapi", "request_input_declaration", "fastapi.input.v1"); return;
+        for (size_t i = 0; i < sizeof(inputs) / sizeof(inputs[0]); i++) {
+            char expected[64]; join(expected, sizeof(expected), "fastapi", inputs[i]);
+            if (strcmp(canonical, expected) == 0) { mark(f, b, "fastapi", "request_input_declaration", "fastapi.input.v1"); return; }
         }
     }
     if (b->instance && (strncmp(b->canonical, "fastapi.", 8) == 0 || strncmp(b->canonical, "flask.", 6) == 0)) {
-        const char *fw = b->canonical[1] == 'a' ? "fastapi" : "flask";
-        const char *method = http_method(member);
-        bool registration = strcmp(member, "add_api_route") == 0;
-        if ((decorated(node) || registration) && (method || strcmp(member, "route") == 0 || strcmp(member, "api_route") == 0 || registration)) {
-            TSNode path = route_path(m, node);
-            if (ts_node_is_null(path)) return;
+        bool fastapi = strncmp(b->canonical, "fastapi.", 8) == 0;
+        const char *fw = fastapi ? "fastapi" : "flask";
+        const char *method = http_method(member, false);
+        if (method && strcmp(method, "ALL") == 0) method = NULL;
+        bool registration = fastapi && strcmp(member, "add_api_route") == 0;
+        bool route = fastapi ? strcmp(member, "api_route") == 0 : strcmp(member, "route") == 0;
+        if ((decorated(node) || registration) && (method || route || registration)) {
+            TSNode path = python_argument(m, node, 0, fastapi ? "path" : "rule", NULL);
+            TSNode handler = registration ? python_argument(m, node, 1, "endpoint", NULL) : (TSNode){0};
+            if (ts_node_is_null(path) || (registration && ts_node_is_null(handler))) return;
             mark(f, b, fw, "route_declaration", "python.web-route.v1"); f->http_method = method ? method : "DECLARED_OR_FRAMEWORK_DEFAULT";
-            path_and_handler(f, path, registration ? argument(node, 1) : (TSNode){0}); return;
+            path_and_handler(f, path, handler); return;
         }
-        if (decorated(node) && (strcmp(member, "before_request") == 0 || strcmp(member, "after_request") == 0))
+        if (!fastapi && decorated(node) && (strcmp(member, "before_request") == 0 || strcmp(member, "after_request") == 0))
             mark(f, b, fw, "request_hook_declaration", "flask.request-hook.v1");
         return;
     }
     if (!b->instance && (strcmp(canonical, "django.urls.path") == 0 || strcmp(canonical, "django.urls.re_path") == 0)) {
+        TSNode path = python_argument(m, node, 0, "route", NULL), handler = python_argument(m, node, 1, "view", NULL);
+        if (ts_node_is_null(path) || ts_node_is_null(handler)) return;
         mark(f, b, "django", "route_declaration", "django.url-pattern.v1"); f->http_method = "UNSPECIFIED";
-        path_and_handler(f, argument(node, 0), argument(node, 1)); return;
+        path_and_handler(f, path, handler); return;
     }
     if (!b->instance && decorated(node) && (strcmp(canonical, "django.contrib.auth.decorators.login_required") == 0 || strcmp(canonical, "django.contrib.auth.decorators.permission_required") == 0 || strcmp(canonical, "django.views.decorators.csrf.csrf_exempt") == 0)) {
         mark(f, b, "django", strcmp(member, "csrf_exempt") == 0 ? "control_exemption_declaration" : "authorization_declaration", "django.control-decorator.v1"); return;
     }
     if (b->instance && strcmp(b->canonical, "express.Router") == 0) {
-        const char *method = http_method(member);
+        const char *method = http_method(member, false);
         if (method && f->argument_total >= 2) {
             mark(f, b, "express", "route_declaration", "express.route.v1"); f->http_method = method;
             path_and_handler(f, argument(node, 0), argument(node, f->argument_total - 1));
@@ -396,7 +473,7 @@ void sf_models_apply(sf_models *m, sf_fact *f, TSNode node) {
             mark(f, b, "express", "middleware_attachment", "express.middleware.v1");
         return;
     }
-    if (!b->instance && decorated(node) && strncmp(canonical, "@nestjs/common.", 15) == 0) {
+    if (!b->instance && decorated(node) && strncmp(canonical, "@nestjs/common.", 15) == 0 && !strchr(canonical + 15, '.')) {
         if (strcmp(member, "Controller") == 0) { mark(f, b, "nestjs", "route_prefix_declaration", "nestjs.controller.v1"); path_and_handler(f, argument(node, 0), (TSNode){0}); return; }
         static const char *const verbs[] = {"Get", "Post", "Put", "Patch", "Delete", "Head", "Options", "All"};
         static const char *const methods[] = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "ALL"};
@@ -409,12 +486,14 @@ void sf_models_apply(sf_models *m, sf_fact *f, TSNode node) {
         static const char *const inputs[] = {"Body", "Param", "Query", "Headers", "Req", "Request", "UploadedFile", "UploadedFiles"};
         for (size_t i = 0; i < sizeof(inputs) / sizeof(inputs[0]); i++) if (strcmp(member, inputs[i]) == 0) { mark(f, b, "nestjs", "request_input_declaration", "nestjs.input.v1"); return; }
     }
-    if (((!b->instance && strcmp(b->canonical, "net/http") == 0) || (b->instance && strcmp(b->canonical, "net/http.ServeMux") == 0)) && (strcmp(member, "HandleFunc") == 0 || strcmp(member, "Handle") == 0) && f->argument_total >= 2) {
+    if (((!b->instance && (strcmp(canonical, "net/http.HandleFunc") == 0 || strcmp(canonical, "net/http.Handle") == 0)) ||
+         (b->instance && strcmp(b->canonical, "net/http.ServeMux") == 0 && (strcmp(member, "HandleFunc") == 0 || strcmp(member, "Handle") == 0))) && f->argument_total >= 2) {
         mark(f, b, "go-net-http", "route_declaration", "go.http-route.v1"); f->http_method = "DECLARED_IN_PATTERN_OR_UNSPECIFIED";
         path_and_handler(f, argument(node, 0), argument(node, 1)); return;
     }
     if (b->instance && strcmp(b->canonical, "gin.Engine") == 0) {
-        const char *method = http_method(member);
+        const char *method = http_method(member, true);
+        if (method && strcmp(method, "ALL") == 0) method = NULL;
         if ((method || strcmp(member, "Any") == 0) && f->argument_total >= 2) {
             mark(f, b, "gin", "route_declaration", "gin.route.v1"); f->http_method = method ? method : "ALL";
             path_and_handler(f, argument(node, 0), argument(node, f->argument_total - 1));
