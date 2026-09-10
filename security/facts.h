@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 #define SF_SCHEMA "cbm.security-facts.v1"
-#define SF_VERSION "0.2.0"
+#define SF_VERSION "0.3.0"
 #ifndef SF_BUILD_ID
 #define SF_BUILD_ID "unversioned"
 #endif
@@ -17,6 +17,7 @@
 #define SF_MAX_OUTPUT (4U * 1024U * 1024U)
 #define SF_PREVIEW_BYTES 256U
 #define SF_MAX_BINDINGS 256U
+#define SF_MAX_PAGE 200U
 
 typedef struct {
     uint32_t start, end;
@@ -53,7 +54,17 @@ typedef struct {
 typedef struct {
     size_t offset, limit;
     const char *expected_analysis, *fact_id;
+    const char *kind, *framework, *role, *enclosing_id;
+    /* Decoded from the cursor. The query identity includes the analysis identity. */
+    const char *expected_query;
 } sf_query;
+
+typedef struct {
+    size_t indices[SF_MAX_PAGE];
+    size_t count, total, offset;
+    char query_id[65];
+    bool has_more;
+} sf_selection;
 
 /* No filesystem access. The caller owns the immutable source buffer. */
 bool sf_utf8(const char *text, size_t size);
@@ -62,6 +73,11 @@ const char *sf_language_for_path(const char *path);
 bool sf_digest_valid(const char *digest);
 bool sf_document_init(sf_document *doc, const char *source, size_t size, const char *path);
 void sf_fact_id(const sf_document *doc, const sf_fact *fact, char out[65]);
+/* Validate CLI/API input before reading or parsing source. */
+const char *sf_query_validate(const sf_query *query);
+/* Also check source-bound identities before spending parser work. */
+const char *sf_query_check(const sf_document *doc, const sf_query *query);
+const char *sf_query_select(const sf_document *doc, const sf_query *query, sf_selection *out);
 /* Output is allocated only on success. Errors never return half a JSON document. */
 const char *sf_render(const sf_document *doc, const sf_query *query, char **out);
 const char *sf_extract(sf_document *doc);

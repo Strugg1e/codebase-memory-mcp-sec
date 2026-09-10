@@ -62,11 +62,9 @@ bool sf_digest_valid(const char *s) {
         if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f'))) return false;
     return true;
 }
-
 static void hash_field(cbm_sha256_ctx *hash, const char *value) {
     cbm_sha256_update(hash, value, strlen(value) + 1);
 }
-
 static void finish_hash(cbm_sha256_ctx *hash, char out[65]) {
     uint8_t bytes[32];
     static const char hex[] = "0123456789abcdef";
@@ -74,7 +72,6 @@ static void finish_hash(cbm_sha256_ctx *hash, char out[65]) {
     for (size_t i = 0; i < 32; i++) { out[2 * i] = hex[bytes[i] >> 4]; out[2 * i + 1] = hex[bytes[i] & 15]; }
     out[64] = 0;
 }
-
 bool sf_document_init(sf_document *d, const char *source, size_t size, const char *path) {
     if (!d || size > SF_MAX_SOURCE || !sf_path_valid(path) || !sf_utf8(source, size)) return false;
     memset(d, 0, sizeof(*d));
@@ -88,7 +85,6 @@ bool sf_document_init(sf_document *d, const char *source, size_t size, const cha
     finish_hash(&hash, d->analysis_id);
     return true;
 }
-
 void sf_fact_id(const sf_document *d, const sf_fact *f, char out[65]) {
     cbm_sha256_ctx hash;
     char range[64];
@@ -98,7 +94,6 @@ void sf_fact_id(const sf_document *d, const sf_fact *f, char out[65]) {
 }
 
 typedef struct { char *text; size_t used; bool failed; } writer;
-
 static void append(writer *w, const char *s, size_t n) {
     if (w->failed) return;
     if (n > SF_MAX_OUTPUT - 1 - w->used) { w->failed = true; return; }
@@ -119,7 +114,7 @@ static void string(writer *w, const char *s, size_t n) {
     emit(w, "\"");
 }
 static void text(writer *w, const char *s) { string(w, s, strlen(s)); }
-
+static void nullable_text(writer *w, const char *s) { if (s) text(w, s); else emit(w, "null"); }
 static bool span_valid(const sf_document *d, sf_span p) {
     if (p.start > p.end || p.end > d->source_size) return false;
     if (p.start < d->source_size && ((unsigned char)d->source[p.start] & 0xc0U) == 0x80U) return false;
@@ -136,7 +131,6 @@ static void span(writer *w, const sf_document *d, sf_span p) {
     emit(w, ",\"text_bytes_returned\":"); number(w, preview);
     emit(w, ",\"text_truncated\":"); boolean(w, preview < n); emit(w, "}");
 }
-
 static bool fact_valid(const sf_document *d, const sf_fact *f) {
     if (!f->kind || !f->syntax || !span_valid(d, f->span) || f->argument_count > SF_MAX_ARGUMENTS ||
         f->argument_count > f->argument_total || (f->argument_count && !f->arguments) ||
@@ -151,7 +145,6 @@ static bool fact_valid(const sf_document *d, const sf_fact *f) {
         if (!span_valid(d, f->arguments[i]) || f->arguments[i].start < f->span.start || f->arguments[i].end > f->span.end) return false;
     return true;
 }
-
 static void framework(writer *w, const sf_document *d, const sf_fact *f) {
     if (!f->framework) return;
     emit(w, ",\"framework_model\":{\"framework\":"); text(w, f->framework);
@@ -165,7 +158,6 @@ static void framework(writer *w, const sf_document *d, const sf_fact *f) {
     if (f->http_method) { emit(w, ",\"http_method\":"); text(w, f->http_method); }
     emit(w, ",\"full_route_resolution\":\"not_attempted\",\"runtime_binding\":\"not_verified\"}");
 }
-
 static void fact(writer *w, const sf_document *d, const sf_fact *f) {
     char id[65]; sf_fact_id(d, f, id);
     emit(w, "{\"id\":"); text(w, id); emit(w, ",\"kind\":"); text(w, f->kind);
@@ -199,27 +191,25 @@ static void fact(writer *w, const sf_document *d, const sf_fact *f) {
 const char *sf_render(const sf_document *d, const sf_query *q, char **out) {
     if (!out) return "invalid_arguments";
     *out = NULL;
-    if (!d || !d->language || !q || !q->limit || q->limit > 200 || d->count > SF_MAX_FACTS || (d->count && !d->facts)) return "invalid_arguments";
-    if ((q->offset || q->fact_id) && !q->expected_analysis) return "analysis_id_required";
-    if (q->expected_analysis && (!sf_digest_valid(q->expected_analysis) || strcmp(q->expected_analysis, d->analysis_id) != 0)) return "analysis_mismatch";
-    if (q->offset > d->count || (q->fact_id && (!sf_digest_valid(q->fact_id) || q->offset))) return "invalid_arguments";
-    size_t begin = q->offset, end = d->count;
-    if (end - begin > q->limit) end = begin + q->limit;
-    if (q->fact_id) {
-        bool found = false;
-        for (size_t i = 0; i < d->count; i++) {
-            char id[65]; sf_fact_id(d, &d->facts[i], id);
-            if (strcmp(id, q->fact_id) == 0) { begin = i; end = i + 1; found = true; break; }
-        }
-        if (!found) return "fact_not_found_in_extracted_scope";
-    }
-    for (size_t i = begin; i < end; i++) if (!fact_valid(d, &d->facts[i])) return "invalid_evidence_span";
+    const char *error = sf_query_check(d, q);
+    if (error) return error;
+    if (d->count > SF_MAX_FACTS || (d->count && !d->facts)) return "invalid_arguments";
+    /* Validate before filtering. A selector must not hide a broken evidence record. */
+    for (size_t i = 0; i < d->count; i++) if (!fact_valid(d, &d->facts[i])) return "invalid_evidence_span";
+    sf_selection page;
+    error = sf_query_select(d, q, &page);
+    if (error) return error;
     writer w = {.text = malloc(SF_MAX_OUTPUT)};
     if (!w.text) return "out_of_memory";
     w.text[0] = 0;
     emit(&w, "{\"schema\":\"" SF_SCHEMA "\",\"producer\":{\"name\":\"cbm-security-facts\",\"version\":\"" SF_VERSION "\",\"build_id\":");
     text(&w, SF_BUILD_ID); emit(&w, "},\"analysis_id\":"); text(&w, d->analysis_id);
-    emit(&w, ",\"source\":{\"path\":"); text(&w, d->path);
+    emit(&w, ",\"query\":{\"id\":"); text(&w, page.query_id);
+    emit(&w, ",\"filters\":{\"kind\":"); nullable_text(&w, q->kind);
+    emit(&w, ",\"framework\":"); nullable_text(&w, q->framework);
+    emit(&w, ",\"role\":"); nullable_text(&w, q->role);
+    emit(&w, ",\"enclosing_id\":"); nullable_text(&w, q->enclosing_id);
+    emit(&w, "}},\"source\":{\"path\":"); text(&w, d->path);
     emit(&w, ",\"language\":"); text(&w, d->language); emit(&w, ",\"sha256\":"); text(&w, d->source_hash);
     emit(&w, ",\"bytes\":"); number(&w, d->source_size);
     emit(&w, "},\"scope\":\"single_file\",\"coverage\":{\"status\":\"syntax_only\",\"parse_has_error\":"); boolean(&w, d->parse_has_error);
@@ -231,13 +221,25 @@ const char *sf_render(const sf_document *d, const sf_query *q, char **out) {
     emit(&w, ",\"framework_bindings_limited\":"); boolean(&w, d->framework_bindings_limited);
     emit(&w, ",\"unknowns\":[\"cross_file_resolution_not_attempted\",\"value_flow_not_attempted\",\"authorization_effect_not_evaluated\",\"absence_is_not_a_security_verdict\",\"framework_models_cover_only_documented_forms\",\"dynamic_rebinding_and_route_composition_not_modeled\"");
     if (strcmp(d->language, "java") == 0) emit(&w, ",\"java_unicode_escape_preprocessing_not_modeled\"");
-    emit(&w, " ]},\"page\":{\"offset\":"); number(&w, begin);
-    emit(&w, ",\"returned\":"); number(&w, end - begin); emit(&w, ",\"extracted_total\":"); number(&w, d->count);
-    emit(&w, ",\"total_is_lower_bound\":"); boolean(&w, !d->traversal_complete || d->parse_has_error);
-    bool more = !q->fact_id && end < d->count;
-    emit(&w, ",\"has_more\":"); boolean(&w, more); emit(&w, ",\"next_offset\":"); if (more) number(&w, end); else emit(&w, "null");
+    emit(&w, " ]},\"page\":{\"offset\":"); number(&w, page.offset);
+    emit(&w, ",\"returned\":"); number(&w, page.count);
+    emit(&w, ",\"extracted_total\":"); number(&w, d->count);
+    emit(&w, ",\"matched_total\":"); number(&w, page.total);
+    emit(&w, ",\"total_is_lower_bound\":");
+    boolean(&w, !d->traversal_complete || d->parse_has_error || ((q->framework || q->role) && !d->framework_analysis_complete));
+    emit(&w, ",\"has_more\":"); boolean(&w, page.has_more);
+    emit(&w, ",\"next_offset\":");
+    if (page.has_more) number(&w, page.offset + page.count); else emit(&w, "null");
+    emit(&w, ",\"next_cursor\":");
+    if (page.has_more) {
+        char cursor[88]; snprintf(cursor, sizeof(cursor), "%s:%zu", page.query_id, page.offset + page.count);
+        text(&w, cursor);
+    } else emit(&w, "null");
     emit(&w, "},\"facts\":[");
-    for (size_t i = begin; i < end; i++) { if (i > begin) emit(&w, ","); fact(&w, d, &d->facts[i]); }
+    for (size_t i = 0; i < page.count; i++) {
+        if (i) emit(&w, ",");
+        fact(&w, d, &d->facts[page.indices[i]]);
+    }
     emit(&w, "]}\n");
     if (w.failed) { free(w.text); return "output_limit_exceeded"; }
     *out = w.text; return NULL;
