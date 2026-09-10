@@ -1,9 +1,10 @@
-# 安全证据 MCP v0.4
+# 安全证据 MCP v0.5
 
-本版新增独立的纯 C 可执行文件 `cbm-security-mcp`，把已有证据核心接到只读 MCP。
+`cbm-security-mcp` 是独立的纯 C 只读证据服务，直接复用已有解析和查询核心。
 它不是对原有 CBM MCP 服务直接加工具；原有导航图、数据库、安装器和主构建保持不变。
 `cbm-security-facts` 的单文件 CLI 继续可用，原有字段与框架范围见 `SECURITY_FACTS.md`。
-该文件中的 v0.3“尚无 MCP”边界描述的是旧版；新增服务以本文为准。
+该文件中的 v0.3“尚无 MCP”描述的是旧版。v0.5 新增的 Java/MyBatis 操作上下文见
+[SECURITY_OPERATIONS.md](SECURITY_OPERATIONS.md)；其候选关联不等于完整跨文件分析。
 
 ## 实际工作方式
 
@@ -13,7 +14,7 @@
     → 打成带逐文件哈希的源码包
     → 可信配置固定整个包的 SHA-256
     → MCP 启动时校验并把源码保存在内存
-    → Agent 按需列文件、筛事实、读证据、补源码
+    → Agent 按需列文件、筛事实、读证据、补源码和查操作上下文
 ```
 
 这里的快照是一个**明确选择的文件集合**，不声称它覆盖整个仓库。它不运行 Git，也不创建
@@ -21,22 +22,25 @@
 
 服务启动后不会重新打开源码包、目标路径或目标配置。即使磁盘上的源码包被替换或删除，
 查询仍使用已校验的内存字节。换源码必须重启进程并提供新的包哈希，不能通过工具请求换根目录。
-源码包可以包含不支持分析的 UTF-8 文本文件；清单会标记它们，查询返回 `unsupported_language`，
-仍可按字节读取这些文件。二进制、含 NUL 或无效 UTF-8 输入拒绝，不静默丢弃。
+源码包可以包含不支持通用事实分析的 UTF-8 文本文件；清单会标记它们，事实查询返回
+`unsupported_language`，仍可按字节读取。XML 可作为新操作工具的显式映射输入，但不加入
+通用事实抽取语言列表。二进制、含 NUL 或无效 UTF-8 输入拒绝，不静默丢弃。
 
-## 五个只读工具
+## 六个只读工具
 
 | 工具 | 用途与边界 |
 |---|---|
-| `get_snapshot_info` | 返回快照编号、文件数、可分析文件数和真实缓存计数；不是安全覆盖率 |
-| `list_snapshot_files` | 分页列出包中的所有文件，包含不支持分析的文件；不会扫描磁盘 |
+| `get_snapshot_info` | 返回快照编号、文件数、可分析文件数、真实事实缓存及操作解析计数；不是安全覆盖率 |
+| `list_snapshot_files` | 分页列出包中的所有文件，包含不支持通用分析的文件；不会扫描磁盘 |
 | `query_security_facts` | 按 `kind/framework/role/enclosing_id` 精确取交集；沿用原有事实和覆盖信息 |
 | `get_security_evidence` | 用快照、路径、分析编号和事实编号读取单条证据 |
 | `read_snapshot_source` | 用路径、文件哈希和字节范围补读源码，最多 16 KiB，不截断字符 |
+| `inspect_operation_context` | Java 调用的局部参数和分支，以及可选的显式 MyBatis 映射候选；不输出授权结论 |
 
 除 `get_snapshot_info` 外，都要求 `snapshot_id`。查询路径必须已在包中。
 `get_security_evidence` 还要求 `analysis_id`、`fact_id`；`read_snapshot_source` 要求
 `sha256`、`start_byte`、`end_byte`。起点包含、终点不包含，必须落在 UTF-8 字符边界。
+新操作工具要求 `analysis_id`、`call_id`；可选的 `mapper_path` 与 `mapping_path` 必须一起传入。
 
 事实查询每页默认 20 条，上限 200。`query_security_facts` 的可选 `expect_analysis` 可预先
 校验分析编号。所属声明查询仍只查询直接归属，不自动证明类级或全局控制适用。
@@ -50,7 +54,7 @@
 
 从可信的本工具工作区执行，不从被审计目录加载脚本。需要 C 编译器、make 和 Python 3。
 Python 只负责构建、可选打包和测试；MCP 与 CLI 本身都不依赖 Python 运行时。
-JSON 复用仓库已有的 yyjson，不下载或添加新库。
+JSON 和 XML 语法复用仓库已有依赖，不下载或添加新库。
 
 ```bash
 make -f Makefile.security
@@ -85,7 +89,7 @@ build/security/cbm-security-mcp \
 
 ### 接入 Codex / 其他 Harness
 
-下面是 Codex 的 stdio 配置示例，不会由本工具自动修改用户配置。替换绝对路径和实际 64 位哈希：
+下面保留原有 Codex stdio 配置示例，不会由本工具自动修改用户配置。替换绝对路径和实际 64 位哈希：
 
 ```toml
 [mcp_servers.cbm_security]
@@ -107,20 +111,25 @@ get_snapshot_info
 → query_security_facts（选路径与路由类别）
 → get_security_evidence（取一个编号）
 → read_snapshot_source（读取对应片段）
+→ 可选：inspect_operation_context（Java 调用及明确映射）
 → Agent 继续检查，而不是把框架标注直接写成漏洞
 ```
 
-上述配置方式参考 OpenAI 官方 MCP 文档；本轮自动测试不启动 Codex、不调用模型 API。
+上述配置方式参考 OpenAI 官方 MCP 文档；自动测试不启动 Codex、不调用模型 API。
 真实 Codex 会话兼容性、召回、准确率、耗时及 Token 收益需要另行在相同任务条件下评测。
 
 ## 缓存和失败状态
 
-服务只保留**最近一个文件**的解析结果，避免无界内存缓存。相同文件的连续分页、筛选和单条
-证据读取不重复解析；切换文件会替换缓存，再切回时重新解析。缓存仅在当前进程有效。
+通用事实查询只保留**最近一个文件**的解析结果，避免无界内存缓存。相同文件的连续分页、
+筛选和单条证据读取不重复解析；切换文件会替换缓存，再切回时重新解析。缓存仅在当前进程有效。
 `get_snapshot_info.cache` 返回 `parse_attempts`、`hits`、`failed_files`，不使用模拟计数。
 
-版本或查询不匹配在解析前拒绝。一次解析失败会记录在该文件上，当前进程不反复重试同一输入；
-需要重试时由 Harness 重启服务。语法/遍历有缺口但仍有合法部分结果时，保留其覆盖字段。
+新操作工具复用调用点身份检查，但随后按需重新解析最多三个选定文件，当前没有操作上下文缓存。
+它的实际请求与解析次数单独记录在 `get_snapshot_info.operation_context`，不能把原事实缓存命中
+理解成操作工具没有重新解析。映射未知时保留局部 Java 材料及缺口；不返回授权结论。
+
+版本或查询不匹配在解析前拒绝。通用事实的一次解析失败会记录在该文件上，当前进程不反复重试
+同一输入；需要重试时由 Harness 重启服务。语法/遍历有缺口但仍有合法部分结果时，保留覆盖字段。
 工具错误返回 `isError=true` 及稳定错误码，未知工具/方法返回协议错误。
 空结果、不支持、预算停止、服务退出均不能转成“无漏洞”。
 
@@ -145,7 +154,9 @@ Harness 必须设置墙钟和内存限制；需要立即中止时终止工作进
 | 单次源码补读 | 16 KiB |
 | 单文件事实与遍历 | 20,000 条 / 每次主要遍历 200,000 节点 |
 | 一页事实 | 最多 200 条 |
-| 原始事实 JSON | 最多 4 MiB |
+| 操作上下文单个输入 | 256 KiB |
+| 操作上下文每棵语法树 | 50,000 节点 |
+| 原始事实 / 操作上下文 JSON | 最多 4 MiB |
 | MCP 序列化响应 | 最多 64 MiB，包含结构化和文本兼容副本 |
 
 大输出仍可能超过模型上下文预算，优先使用较小页和精准筛选。MCP 同时返回 `structuredContent`
@@ -158,12 +169,14 @@ Harness 必须设置墙钟和内存限制；需要立即中止时终止工作进
 
 ## 验证与未实现范围
 
-`tests/security/test_mcp.py` 通过真实子进程测试握手、五个工具、所有六套解析器与 CLI 等价性、
-缓存、分页绑定、原始字节、旧版本拒绝、输入边界及启动失败。还测试打包器的路径和链接反例。
+`tests/security/test_mcp.py` 测试工具发现、原有五工具、所有六套通用解析器与 CLI 等价性、
+缓存、分页绑定、原始字节、旧版本拒绝、输入边界及启动失败。操作工具由
+`tests/security/test_operation.py` 与 `test_operation_edges.py` 测试真实 Java/XML 解析和 RPC。
 是否已通过请查看当前提交的 CI 日志，测试代码存在不等于已执行。
 
-本版不新增语言或框架，不实现跨文件解析、值传播、完整安全图、全仓扫描、增量图更新、部署策略、
-安全控制生效或漏洞判定。没有自动把服务接进 Sulliu，也没有修改其生产配置。
+本版不增加通用语言或 Web 框架。除了明确选择的 Java/MyBatis 关联候选，仍无传递式跨文件
+调用或值传播、完整安全图、全仓扫描、增量图更新、部署策略、安全控制生效证明或漏洞判定。
+没有自动把服务接进 Sulliu，也没有修改其生产配置。
 
 官方参考：
 - https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle

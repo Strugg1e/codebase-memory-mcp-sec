@@ -628,7 +628,7 @@ static void mybatis_context(context *c, const sf_operation_source *caller, const
     parameter_binding bindings[OP_PARAMS] = {0};
     size_t bound = param_bindings(c, mapper, mn, mapper_method, mapping, bindings);
     xt = parse(c, xml, tree_sitter_xml(), xn, &error);
-    if (!xt) { mapping_status(c, mapping, error); goto done; }
+    if (!xt) { gap(c, "xml_mapping_not_parsed"); mapping_status(c, mapping, error); goto done; }
     TSNode root = {0}, statement = {0}; size_t roots = 0, matches = 0;
     for (size_t i = 0; i < xn->count; i++) {
         TSNode v = xn->items[i];

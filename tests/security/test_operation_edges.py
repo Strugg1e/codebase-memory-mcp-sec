@@ -53,6 +53,19 @@ class OperationEdges(unittest.TestCase):
         self.assertEqual(s.call("inspect_operation_context", args, ok=False)["error"]["code"], "snapshot_mismatch")
         self.assertEqual(s.call("get_snapshot_info")["operation_context"]["parse_attempts"], 0)
 
+    def test_standard_mapper_doctype_is_not_loaded(self):
+        header = '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">\n'
+        data = self.session(xml=header + base.XML).inspect()
+        self.assertEqual(data["mybatis"]["status"], "explicit_mapping_candidate")
+        self.assertIn("xml_dtd_not_loaded_or_validated", data["gaps"])
+
+    def test_xml_parse_error_identifies_the_failed_input(self):
+        data = self.session(xml="<mapper>").inspect()
+        self.assertEqual(data["mybatis"]["status"], "unresolved")
+        self.assertEqual(data["mybatis"]["reason"], "operation_syntax_incomplete")
+        self.assertIn("xml_mapping_not_parsed", data["gaps"])
+        self.assertTrue(data["java_context"]["parameters"])
+
 
 if __name__ == "__main__":
     unittest.main()
