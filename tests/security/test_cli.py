@@ -175,7 +175,7 @@ class EvidenceCLI(unittest.TestCase):
                      ("--limit", "2", "--limit", "3"), ("--unexpected", "x")):
             with self.subTest(args=args):
                 self.assertIn("error", self.run_tool(SOURCE, *args, ok=False))
-        for path in ("A.py", "../A.java", "/A.java", "a//A.java", "C:\\A.java"):
+        for path in ("A.rb", "../A.java", "/A.java", "a//A.java", "C:\\A.java"):
             with self.subTest(path=path):
                 self.assertIn("error", self.run_tool(SOURCE, ok=False, path=path))
 

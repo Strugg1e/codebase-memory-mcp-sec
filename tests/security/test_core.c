@@ -10,8 +10,10 @@ int main(void) {
     sf_query q = {.limit = 50};
     char *out = NULL;
     CHECK(sf_path_valid("src/例子.java"));
+    CHECK(sf_path_valid("src/api.py")); CHECK(sf_path_valid("src/api.ts"));
+    CHECK(sf_path_valid("src/api.tsx")); CHECK(sf_path_valid("src/api.go"));
     const char *bad_paths[] = {"../A.java", "/A.java", "a/../A.java", "a//A.java", "a/./A.java",
-                              "C:A.java", "a\\A.java", "A.py", "", "x\n.java", NULL};
+                              "C:A.java", "a\\A.java", "A.rb", "", "x\n.java", NULL};
     for (size_t i = 0; bad_paths[i]; i++) CHECK(!sf_path_valid(bad_paths[i]));
     CHECK(sf_utf8("你好\xf0\x9f\x98\x80", 10));
     CHECK(!sf_utf8("\xc0\x80", 2)); CHECK(!sf_utf8("\xed\xa0\x80", 3));

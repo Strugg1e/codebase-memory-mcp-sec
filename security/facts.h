@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 #define SF_SCHEMA "cbm.security-facts.v1"
-#define SF_VERSION "0.1.0"
+#define SF_VERSION "0.2.0"
 #ifndef SF_BUILD_ID
 #define SF_BUILD_ID "unversioned"
 #endif
@@ -16,6 +16,7 @@
 #define SF_MAX_ARGUMENTS 256U
 #define SF_MAX_OUTPUT (4U * 1024U * 1024U)
 #define SF_PREVIEW_BYTES 256U
+#define SF_MAX_BINDINGS 256U
 
 typedef struct {
     uint32_t start, end;
@@ -32,16 +33,21 @@ typedef struct {
     sf_span *arguments;
     uint32_t argument_count, argument_total;
     bool has_arguments;
+    /* Argument expressions are syntax slots, not expanded runtime arguments. */
+    bool has_argument_expansion;
+    const char *framework, *role, *rule_id, *http_method;
+    sf_span import_evidence, binding_evidence, path_expression, handler;
+    bool has_import_evidence, has_binding_evidence, has_path_expression, has_handler;
 } sf_fact;
 
 typedef struct {
-    const char *source, *path;
+    const char *source, *path, *language;
     size_t source_size;
     char source_hash[65], analysis_id[65];
     sf_fact *facts;
-    size_t count;
-    size_t nodes_visited;
+    size_t count, nodes_visited;
     bool parse_has_error, traversal_complete;
+    bool framework_analysis_complete, framework_bindings_limited;
 } sf_document;
 
 typedef struct {
@@ -52,11 +58,13 @@ typedef struct {
 /* No filesystem access. The caller owns the immutable source buffer. */
 bool sf_utf8(const char *text, size_t size);
 bool sf_path_valid(const char *path);
+const char *sf_language_for_path(const char *path);
 bool sf_digest_valid(const char *digest);
 bool sf_document_init(sf_document *doc, const char *source, size_t size, const char *path);
 void sf_fact_id(const sf_document *doc, const sf_fact *fact, char out[65]);
 /* Output is allocated only on success. Errors never return half a JSON document. */
 const char *sf_render(const sf_document *doc, const sf_query *query, char **out);
+const char *sf_extract(sf_document *doc);
 const char *sf_extract_java(sf_document *doc);
 void sf_document_free(sf_document *doc);
 

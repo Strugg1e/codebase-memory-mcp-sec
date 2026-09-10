@@ -1,4 +1,4 @@
-# Optional Java syntax-evidence provider. Does not change the main CBM build.
+# Optional source-evidence provider. Does not change the main CBM build.
 # Run from the repository root: make -f Makefile.security test
 CC ?= cc
 PYTHON ?= python3
@@ -10,9 +10,13 @@ CPPFLAGS += -Isrc -Isecurity -Iinternal/cbm \
  -Iinternal/cbm/vendored/common
 CFLAGS ?= -O2
 SEC_FLAGS = -std=c11 -D_DEFAULT_SOURCE -D_GNU_SOURCE -Wall -Wextra -Werror $(CFLAGS) $(SANITIZE)
+GRAMMARS = java python javascript typescript tsx go
 CORE = security/facts.c src/foundation/sha256.c src/foundation/secure_random.c
-HEADERS = security/facts.h src/foundation/sha256.h src/foundation/secure_random.h
-VENDOR_DEPS = $(shell find internal/cbm/vendored/ts_runtime internal/cbm/vendored/grammars/java internal/cbm/vendored/common -type f)
+SOURCES = security/main.c security/parser.c security/models.c
+HEADERS = security/facts.h security/parser.h src/foundation/sha256.h src/foundation/secure_random.h
+VENDOR_ROOTS = internal/cbm/vendored/ts_runtime internal/cbm/vendored/common $(addprefix internal/cbm/vendored/grammars/,$(GRAMMARS))
+VENDOR_DEPS = $(shell find $(VENDOR_ROOTS) -type f)
+OBJECTS = $(BUILD)/runtime.o $(addprefix $(BUILD)/grammar-,$(addsuffix .o,$(GRAMMARS)))
 LDLIBS += -lm
 ifeq ($(OS),Windows_NT)
 LDLIBS += -lbcrypt
@@ -21,7 +25,14 @@ endif
 .PHONY: all test test-core clean FORCE
 all: $(BUILD)/cbm-security-facts
 
-# Re-evaluate contents on each build; preserve mtime when the identity is unchanged.
+# Compiler flags are part of the stamp so changing sanitizer/optimization flags
+# in the same build directory cannot silently reuse differently built objects.
+$(BUILD)/flags: FORCE
+	@mkdir -p $(BUILD)
+	@printf '%s\n' '$(CC) $(CPPFLAGS) $(SEC_FLAGS) $(LDLIBS)' > $@.tmp
+	@cmp -s $@.tmp $@ || cp $@.tmp $@
+	@rm -f $@.tmp
+
 $(BUILD)/identity.h: FORCE
 	@mkdir -p $(BUILD)
 	@$(PYTHON) security/build_id.py > $(BUILD)/identity.sha.tmp
@@ -29,19 +40,16 @@ $(BUILD)/identity.h: FORCE
 	@cmp -s $@.tmp $@ || cp $@.tmp $@
 	@rm -f $@.tmp $(BUILD)/identity.sha.tmp
 
-$(BUILD)/runtime.o: internal/cbm/ts_runtime.c $(VENDOR_DEPS)
-	@mkdir -p $(BUILD)
+$(BUILD)/runtime.o: internal/cbm/ts_runtime.c $(VENDOR_DEPS) $(BUILD)/flags
 	$(CC) $(CPPFLAGS) -std=c11 -D_DEFAULT_SOURCE -D_GNU_SOURCE $(CFLAGS) $(SANITIZE) -c $< -o $@
 
-$(BUILD)/java.o: internal/cbm/grammar_java.c $(VENDOR_DEPS)
-	@mkdir -p $(BUILD)
+$(BUILD)/grammar-%.o: internal/cbm/grammar_%.c $(VENDOR_DEPS) $(BUILD)/flags
 	$(CC) $(CPPFLAGS) -std=c11 $(CFLAGS) $(SANITIZE) -c $< -o $@
 
-$(BUILD)/cbm-security-facts: security/main.c security/java.c $(CORE) $(HEADERS) $(BUILD)/identity.h $(BUILD)/runtime.o $(BUILD)/java.o
-	$(CC) $(CPPFLAGS) $(SEC_FLAGS) -include $(BUILD)/identity.h security/main.c security/java.c $(CORE) $(BUILD)/runtime.o $(BUILD)/java.o $(LDLIBS) -o $@
+$(BUILD)/cbm-security-facts: $(SOURCES) $(CORE) $(HEADERS) $(BUILD)/identity.h $(BUILD)/flags $(OBJECTS)
+	$(CC) $(CPPFLAGS) $(SEC_FLAGS) -include $(BUILD)/identity.h $(SOURCES) $(CORE) $(OBJECTS) $(LDLIBS) -o $@
 
-$(BUILD)/test-core: tests/security/test_core.c $(CORE) $(HEADERS)
-	@mkdir -p $(BUILD)
+$(BUILD)/test-core: tests/security/test_core.c $(CORE) $(HEADERS) $(BUILD)/flags
 	$(CC) $(CPPFLAGS) $(SEC_FLAGS) tests/security/test_core.c $(CORE) $(LDLIBS) -o $@
 
 test-core: $(BUILD)/test-core
@@ -49,6 +57,7 @@ test-core: $(BUILD)/test-core
 
 test: all test-core
 	$(PYTHON) tests/security/test_cli.py $(BUILD)/cbm-security-facts
+	$(PYTHON) tests/security/test_multilang.py $(BUILD)/cbm-security-facts
 
 clean:
-	rm -f $(BUILD)/cbm-security-facts $(BUILD)/test-core $(BUILD)/runtime.o $(BUILD)/java.o $(BUILD)/identity.h
+	rm -f $(BUILD)/cbm-security-facts $(BUILD)/test-core $(OBJECTS) $(BUILD)/identity.h $(BUILD)/flags
