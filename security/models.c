@@ -181,11 +181,13 @@ static bool imports(TSNode node, void *opaque) {
             if (!ts_node_is_null(name)) add_binding(m, name, package, node);
             else {
                 const char *slash = strrchr(package, '/'); const char *leaf = slash ? slash + 1 : package;
+                size_t leaf_len = strlen(leaf);
+                if (leaf_len >= sizeof(m->bindings[0].local)) return true;
                 /* The default package spelling is a source slice inside the literal. */
                 if (m->count >= SF_MAX_BINDINGS) m->doc->framework_bindings_limited = true;
                 else {
                     binding *b = &m->bindings[m->count++]; b->parent = -1;
-                    snprintf(b->local, sizeof(b->local), "%s", leaf); strcpy(b->canonical, package);
+                    memcpy(b->local, leaf, leaf_len + 1); strcpy(b->canonical, package);
                     b->name = sf_location(path); b->evidence = sf_location(node); b->scope = sf_location(m->root);
                     for (size_t k = 0; k + 1 < m->count; k++) if (strcmp(m->bindings[k].local, b->local) == 0) { b->invalid = true; m->bindings[k].invalid = true; }
                 }
@@ -234,7 +236,10 @@ static bool factories(TSNode node, void *opaque) {
     binding *owner = resolve(m, sf_call_target(value), canonical, sizeof(canonical));
     const char *instance = owner ? instance_type(canonical) : NULL;
     if (!instance) return true;
-    char saved[256]; snprintf(saved, sizeof(saved), "%s", instance);
+    char saved[256];
+    size_t instance_len = strlen(instance);
+    if (instance_len >= sizeof(saved)) return true;
+    memcpy(saved, instance, instance_len + 1);
     sf_span import_evidence = owner->evidence;
     int parent_index = (int)(owner - m->bindings);
     binding *b = add_binding(m, name, saved, node);
