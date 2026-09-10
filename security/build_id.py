@@ -3,7 +3,7 @@ from hashlib import sha256
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-GRAMMARS = ("java", "python", "javascript", "typescript", "tsx", "go")
+GRAMMARS = ("java", "python", "javascript", "typescript", "tsx", "go", "xml")
 
 
 def build_id() -> str:
