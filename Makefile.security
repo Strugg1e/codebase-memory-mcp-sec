@@ -1,10 +1,10 @@
-# Optional source-evidence provider. Does not change the main CBM build.
+# Optional source-evidence tools. Does not change the main CBM build.
 # Run from the repository root: make -f Makefile.security test
 CC ?= cc
 PYTHON ?= python3
 BUILD ?= build/security
 SANITIZE ?=
-CPPFLAGS += -Isrc -Isecurity -Iinternal/cbm \
+CPPFLAGS += -Isrc -Isecurity -Iinternal/cbm -Ivendored/yyjson \
  -Iinternal/cbm/vendored/ts_runtime/include \
  -Iinternal/cbm/vendored/ts_runtime/src \
  -Iinternal/cbm/vendored/common
@@ -23,7 +23,7 @@ LDLIBS += -lbcrypt
 endif
 
 .PHONY: all test test-core clean FORCE
-all: $(BUILD)/cbm-security-facts
+all: $(BUILD)/cbm-security-facts $(BUILD)/cbm-security-mcp
 
 # Compiler flags are part of the stamp so changing sanitizer/optimization flags
 # in the same build directory cannot silently reuse differently built objects.
@@ -46,8 +46,14 @@ $(BUILD)/runtime.o: internal/cbm/ts_runtime.c $(VENDOR_DEPS) $(BUILD)/flags
 $(BUILD)/grammar-%.o: internal/cbm/grammar_%.c $(VENDOR_DEPS) $(BUILD)/flags
 	$(CC) $(CPPFLAGS) -std=c11 $(CFLAGS) $(SANITIZE) -c $< -o $@
 
+$(BUILD)/yyjson.o: vendored/yyjson/yyjson.c vendored/yyjson/yyjson.h $(BUILD)/flags
+	$(CC) $(CPPFLAGS) -std=c11 $(CFLAGS) $(SANITIZE) -c $< -o $@
+
 $(BUILD)/cbm-security-facts: $(SOURCES) $(CORE) $(HEADERS) $(BUILD)/identity.h $(BUILD)/flags $(OBJECTS)
 	$(CC) $(CPPFLAGS) $(SEC_FLAGS) -include $(BUILD)/identity.h $(SOURCES) $(CORE) $(OBJECTS) $(LDLIBS) -o $@
+
+$(BUILD)/cbm-security-mcp: security/mcp.c security/parser.c security/models.c $(CORE) $(HEADERS) vendored/yyjson/yyjson.h $(BUILD)/identity.h $(BUILD)/flags $(OBJECTS) $(BUILD)/yyjson.o
+	$(CC) $(CPPFLAGS) $(SEC_FLAGS) -include $(BUILD)/identity.h security/mcp.c security/parser.c security/models.c $(CORE) $(OBJECTS) $(BUILD)/yyjson.o $(LDLIBS) -o $@
 
 $(BUILD)/test-core: tests/security/test_core.c $(CORE) $(HEADERS) $(BUILD)/flags
 	$(CC) $(CPPFLAGS) $(SEC_FLAGS) tests/security/test_core.c $(CORE) $(LDLIBS) -o $@
@@ -62,4 +68,4 @@ test: all test-core
 	done
 
 clean:
-	rm -f $(BUILD)/cbm-security-facts $(BUILD)/test-core $(OBJECTS) $(BUILD)/identity.h $(BUILD)/flags
+	rm -f $(BUILD)/cbm-security-facts $(BUILD)/cbm-security-mcp $(BUILD)/yyjson.o $(BUILD)/test-core $(OBJECTS) $(BUILD)/identity.h $(BUILD)/flags

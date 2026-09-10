@@ -19,7 +19,8 @@ def build_id() -> str:
     paths.update(ROOT / p for p in (
         "internal/cbm/ts_runtime.c", "src/foundation/sha256.c", "src/foundation/sha256.h",
         "src/foundation/secure_random.c", "src/foundation/secure_random.h",
-        "security/build_id.py", "Makefile.security",
+        "vendored/yyjson/yyjson.c", "vendored/yyjson/yyjson.h",
+        "security/build_id.py", "security/pack_snapshot.py", "Makefile.security",
     ))
     h = sha256()
     for path in sorted(paths):
