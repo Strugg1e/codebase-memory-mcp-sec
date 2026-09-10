@@ -8,9 +8,9 @@ on:
       - 'internal/cbm/grammar_*.c'
       - 'internal/cbm/ts_runtime.c'
       - 'internal/cbm/vendored/**'
-      - 'vendored/yyjson/**'
       - 'src/foundation/sha256.*'
       - 'src/foundation/secure_random.*'
+      - 'vendored/yyjson/**'
       - '.github/workflows/security-facts.yml'
 permissions:
   contents: read
@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
       - name: Build and test real parsers and pinned MCP with memory checks
@@ -34,3 +34,17 @@ jobs:
           CFLAGS='-O1 -g' SANITIZE='-fsanitize=address,undefined -fno-omit-frame-pointer'
       - name: Build and test with GCC
         run: make -f Makefile.security test CC=gcc BUILD=build/security-gcc
+      - name: Archive tested source and binaries
+        run: |
+          mkdir -p build/security-artifacts
+          git archive --format=tar HEAD | gzip > build/security-artifacts/source.tar.gz
+          cp build/security-gcc/cbm-security-facts build/security-gcc/cbm-security-mcp build/security-artifacts/
+          git rev-parse HEAD > build/security-artifacts/COMMIT.txt
+          (cd build/security-artifacts && sha256sum source.tar.gz cbm-security-facts cbm-security-mcp > SHA256SUMS)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: security-facts-tested-${{ github.event.pull_request.head.sha }}
+          path: build/security-artifacts/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
