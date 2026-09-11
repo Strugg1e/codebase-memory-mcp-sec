@@ -1,5 +1,7 @@
 # 安全证据 MCP v0.5
 
+
+> 当前 0.9 开发版共七个工具，并新增产品能力说明、位置解析和操作视图。见 [当前接入说明](SECURITY_INTEGRATION.md)。下文六工具和无多跳描述属于历史版本范围。
 `cbm-security-mcp` 是独立的纯 C 只读证据服务，直接复用已有解析和查询核心。
 它不是对原有 CBM MCP 服务直接加工具；原有导航图、数据库、安装器和主构建保持不变。
 `cbm-security-facts` 的单文件 CLI 继续可用，原有字段与框架范围见 `SECURITY_FACTS.md`。

@@ -111,8 +111,8 @@ class MCPTest(unittest.TestCase):
 
     def test_tool_schemas_and_readonly_hints(self):
         tools = self.rpc("tools/list")["result"]["tools"]
-        self.assertEqual(len(tools), 6)
-        self.assertEqual(len({t["name"] for t in tools}), 6)
+        self.assertEqual(len(tools), 7)
+        self.assertEqual({t["name"] for t in tools}, {"get_snapshot_info", "list_snapshot_files", "query_security_facts", "get_security_evidence", "read_snapshot_source", "inspect_operation_context", "resolve_code_location"})
         for tool in tools:
             self.assertTrue(tool["annotations"]["readOnlyHint"])
             self.assertFalse(tool["annotations"]["openWorldHint"])
@@ -324,7 +324,7 @@ class Startup(unittest.TestCase):
             self.assertEqual(len(responses), 3)
             self.assertEqual(responses[0]["result"]["protocolVersion"], version if version.startswith("2025-") else "2025-11-25")
             self.assertEqual(responses[1]["error"]["code"], -32002)
-            self.assertEqual(len(responses[2]["result"]["tools"]), 6)
+            self.assertEqual(len(responses[2]["result"]["tools"]), 7)
 
     def test_incomplete_transport_line_is_failure(self):
         self.assertEqual(self.run_bundle(bundle({}), input=b'{"jsonrpc":"2.0"}').returncode, 2)

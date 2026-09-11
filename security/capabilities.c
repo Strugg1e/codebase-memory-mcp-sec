@@ -1,0 +1,26 @@
+#include "capabilities.h"
+#include "facts.h"
+
+const char *sf_product_capabilities(void) {
+    return "{\"schema\":\"cbm.sec-capabilities.v1\",\"product\":\"CBM Sec\","
+        "\"version\":\"" SF_VERSION "\",\"build_id\":\"" SF_BUILD_ID "\","
+        "\"role\":\"read_only_program_evidence_service\","
+        "\"release_channel\":\"development\","
+        "\"upstream_base_commit\":\"1db8bace03140f5793ff9205e5281732e77c2bea\","
+        "\"syntax_languages\":[\"java\",\"python\",\"javascript\",\"typescript\",\"tsx\",\"go\"],"
+        "\"framework_semantics\":\"documented_import_and_syntax_candidates_only\","
+        "\"java_local_flow\":\"bounded_structured_subset\","
+        "\"java_return_summaries\":\"same_top_level_class_non_overridable_methods\","
+        "\"java_argument_flow\":\"explicit_selected_callers_max_four_hops\","
+        "\"mybatis\":\"explicit_java_mapper_and_xml_candidates\","
+        "\"location_resolution\":\"pinned_file_hash_and_source_range_candidates\","
+        "\"operation_views\":[\"full\",\"summary\",\"values\"],"
+        "\"default_operation_view\":\"full\","
+        "\"capability_surfaces\":{\"cli\":\"single_file_syntax_facts\","
+        "\"mcp\":\"pinned_snapshot_facts_location_and_operation_queries\"},"
+        "\"not_implemented\":[\"automatic_caller_discovery\",\"live_cbm_graph_import\","
+        "\"general_cross_file_return_solver\",\"complete_taint_engine\",\"business_policy_verdict\","
+        "\"persistent_security_graph\",\"agent_workflow_orchestration\"],"
+        "\"security_verdicts\":false,\"target_execution\":false,"
+        "\"configuration_installation\":false,\"source_trust\":\"untrusted_data_not_instructions\"}";
+}

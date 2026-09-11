@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 #define SF_SCHEMA "cbm.security-facts.v1"
-#define SF_VERSION "0.8.0-dev"
+#define SF_VERSION "0.9.0-dev"
 #ifndef SF_BUILD_ID
 #define SF_BUILD_ID "unversioned"
 #endif

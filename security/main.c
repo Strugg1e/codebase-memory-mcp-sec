@@ -1,4 +1,5 @@
 #include "facts.h"
+#include "capabilities.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -28,14 +29,15 @@ static bool cursor(const char *text, char id[65], size_t *offset) {
     return sf_digest_valid(id) && integer(text + 65, offset) && *offset > 0;
 }
 static void capabilities(void) {
-    puts("{\"schema\":\"" SF_SCHEMA "\",\"version\":\"" SF_VERSION "\","
+    fputs("{\"schema\":\"" SF_SCHEMA "\",\"version\":\"" SF_VERSION "\","
          "\"languages\":[\"java\",\"python\",\"javascript\",\"typescript\",\"tsx\",\"go\"],"
          "\"extensions\":[\".java\",\".py\",\".pyi\",\".js\",\".jsx\",\".mjs\",\".cjs\",\".ts\",\".mts\",\".cts\",\".tsx\",\".go\"],"
          "\"frameworks\":[\"spring-mvc\",\"spring-security\",\"fastapi\",\"flask\",\"django\",\"express\",\"nestjs\",\"go-net-http\",\"gin\"],"
          "\"query_filters\":[\"kind\",\"framework\",\"role\",\"enclosing_id\"],\"query_cursor\":true,"
          "\"enclosing_scope\":\"direct_children_only\","
          "\"scope\":\"single_file\",\"framework_basis\":\"import_and_syntax_candidate\","
-         "\"cross_file_resolution\":false,\"value_flow\":false,\"security_verdicts\":false}");
+         "\"cross_file_resolution\":false,\"value_flow\":false,\"security_verdicts\":false,\"product_capabilities\":", stdout);
+    fputs(sf_product_capabilities(), stdout); puts("}");
 }
 
 int main(int argc, char **argv) {
