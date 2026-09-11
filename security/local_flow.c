@@ -13,18 +13,27 @@
 #define LF_WORDS (LF_EVENTS / 64U)
 #define LF_STEPS 20000U
 #define LF_DEPTH 64U
+#define RS_METHODS 32U
+#define RS_DEPTH 8U
+#define RS_STEPS 60000U
 
 enum {
     U_NAME = 1U, U_UNINITIALIZED = 2U, U_HEAP = 4U, U_CALL = 8U,
     U_EXPRESSION = 16U, U_CONTROL = 32U, U_LIMIT = 64U,
-    U_ANCHOR = 128U, U_UNICODE = 256U, U_PARAMETER = 512U
+    U_ANCHOR = 128U, U_UNICODE = 256U, U_PARAMETER = 512U,
+    U_TARGET = 1024U, U_RECURSION = 2048U, U_SUMMARY_LIMIT = 4096U,
+    U_RETURN = 8192U
 };
 static const struct { unsigned bit; const char *name; } reasons[] = {
     {U_NAME, "local_binding_not_resolved"}, {U_UNINITIALIZED, "local_not_initialized"},
     {U_HEAP, "heap_contents_not_modeled"}, {U_CALL, "call_return_not_modeled"},
     {U_EXPRESSION, "expression_not_modeled"}, {U_CONTROL, "control_construct_not_modeled"},
     {U_LIMIT, "local_flow_budget_exceeded"}, {U_ANCHOR, "anchor_not_reached_in_supported_structure"},
-    {U_UNICODE, "java_unicode_escape_not_modeled"}, {U_PARAMETER, "parameter_form_not_modeled"}
+    {U_UNICODE, "java_unicode_escape_not_modeled"}, {U_PARAMETER, "parameter_form_not_modeled"},
+    {U_TARGET, "return_summary_target_not_resolved"},
+    {U_RECURSION, "recursive_return_summary_not_solved"},
+    {U_SUMMARY_LIMIT, "return_summary_budget_exceeded"},
+    {U_RETURN, "normal_return_not_established"}
 };
 /* direct and derived are disjoint only per path. A join can have both bits for
  * the same formal: x in one branch and x+1 in the other. Never collapse them. */
@@ -36,11 +45,28 @@ typedef struct {
 typedef struct { TSNode name; origin value; } variable;
 typedef struct { variable vars[LF_VARS]; size_t count; bool alive; } environment;
 typedef struct { TSNode node; const char *kind; } event;
+/* Symbolic returns use callee parameter positions. Evidence numbering is local
+ * to each summary and is remapped when the summary is instantiated at a call. */
+typedef struct {
+    TSNode method;
+    origin returned;
+    event events[LF_EVENTS];
+    size_t nevents, nparams, return_count;
+    bool busy;
+} return_summary;
+typedef struct {
+    return_summary entries[RS_METHODS];
+    size_t count, depth, steps, requests, hits;
+    bool limited;
+} summary_bank;
 typedef yyjson_mut_val value;
 typedef struct {
     const sf_document *doc;
-    TSNode anchor, params[LF_PARAMS];
-    origin arguments[LF_PARAMS];
+    TSNode anchor, method, params[LF_PARAMS];
+    origin arguments[LF_PARAMS], returned;
+    summary_bank *summaries;
+    size_t return_count;
+    bool summary_mode;
     event events[LF_EVENTS];
     size_t nparams, nargs, nevents, steps;
     unsigned prefix_gaps;
@@ -94,6 +120,10 @@ static bool tick(engine *e, unsigned depth) {
     if (++e->steps > LF_STEPS || depth > LF_DEPTH) {
         e->limited = true; e->aborted = true; e->prefix_gaps |= U_LIMIT; return false;
     }
+    if (e->summaries && ++e->summaries->steps > RS_STEPS) {
+        e->summaries->limited = true; e->limited = e->aborted = true;
+        e->prefix_gaps |= U_SUMMARY_LIMIT; return false;
+    }
     return true;
 }
 static origin stamp(engine *e, origin v, TSNode n, const char *kind) {
@@ -134,10 +164,12 @@ static void merge_state(engine *e, environment *a, const environment *b, TSNode 
 }
 static origin expression(engine *, environment *, TSNode, unsigned);
 static void statement(engine *, environment *, TSNode, unsigned);
+static origin summarized_call(engine *, TSNode, const origin *, size_t);
+static void init_parameters(engine *, environment *, TSNode);
 
 /* Iterate siblings with a cursor: large argument/block lists must not turn
  * into quadratic calls to named_child(index). */
-static origin arguments(engine *e, environment *s, TSNode list, unsigned depth, bool capture) {
+static origin arguments(engine *e, environment *s, TSNode list, unsigned depth, bool capture, origin *values, size_t *count) {
     origin all = {.literal = true}; size_t index = 0;
     if (ts_node_is_null(list)) return all;
     TSTreeCursor c = ts_tree_cursor_new(list);
@@ -148,13 +180,16 @@ static origin arguments(engine *e, environment *s, TSNode list, unsigned depth, 
         origin v = expression(e, s, n, depth + 1);
         bool literals = all.literal && v.literal;
         all = join(all, v); all.literal = literals;
+        if (values && index < LF_PARAMS) values[index] = v;
         if (capture) {
             if (index >= LF_PARAMS) { e->limited = e->aborted = true; break; }
-            e->arguments[index++] = v;
+            e->arguments[index] = v;
         }
+        index++;
     } while (ts_tree_cursor_goto_next_sibling(&c));
     ts_tree_cursor_delete(&c);
     if (capture) e->nargs = index;
+    if (count) *count = index;
     return all;
 }
 static origin expression(engine *e, environment *s, TSNode n, unsigned depth) {
@@ -229,11 +264,14 @@ static origin expression(engine *e, environment *s, TSNode n, unsigned depth) {
         if (!ts_node_is_null(receiver)) (void)expression(e, s, receiver, depth + 1);
         if (e->found || e->aborted) return unknown(U_CALL);
         bool selected = same(n, e->anchor);
-        (void)arguments(e, s, sf_field(n, "arguments"), depth + 1, selected);
+        origin actual[LF_PARAMS]; size_t count = 0;
+        (void)arguments(e, s, sf_field(n, "arguments"), depth + 1, selected, actual, &count);
         if (selected && !e->aborted) e->found = true;
-        /* An arbitrary callee does not write Java local bindings. Its return
-         * and mutations to heap contents remain unknown; no arg->return guess. */
-        return stamp(e, unknown(U_CALL), n, "unknown_call_return");
+        if (selected || e->found || e->aborted)
+            return stamp(e, unknown(U_CALL), n, "unknown_call_return");
+        /* Caller locals are independent from callee formals. Only the return
+         * relation is instantiated; heap effects and exceptions are not proved. */
+        return summarized_call(e, n, actual, count);
     }
     if (is(n, "object_creation_expression")) {
         /* Qualified creation evaluates the expression before '.new'. The
@@ -247,7 +285,7 @@ static origin expression(engine *e, environment *s, TSNode n, unsigned depth) {
             if (e->found || e->aborted) break;
         } while (ts_tree_cursor_goto_next_sibling(&c));
         ts_tree_cursor_delete(&c);
-        (void)arguments(e, s, sf_field(n, "arguments"), depth + 1, false);
+        (void)arguments(e, s, sf_field(n, "arguments"), depth + 1, false, NULL, NULL);
         return stamp(e, unknown(U_CALL), n, "unknown_created_value");
     }
     if (is(n, "field_access")) {
@@ -299,7 +337,11 @@ static void statement(engine *e, environment *s, TSNode n, unsigned depth) {
     if (is(n, "expression_statement")) { (void)expression(e, s, first_named(n), depth + 1); return; }
     if (is(n, "return_statement") || is(n, "throw_statement")) {
         TSNode expr = first_named(n);
-        if (!ts_node_is_null(expr)) (void)expression(e, s, expr, depth + 1);
+        origin v = !ts_node_is_null(expr) ? expression(e, s, expr, depth + 1) : unknown(U_RETURN);
+        if (e->summary_mode && is(n, "return_statement")) {
+            e->returned = join(e->returned, stamp(e, v, n, "method_return"));
+            e->return_count++;
+        }
         s->alive = false; return;
     }
     if (is(n, "if_statement")) {
@@ -325,6 +367,135 @@ static void statement(engine *e, environment *s, TSNode n, unsigned depth) {
      * Their bodies are not linearized and a call inside is not guessed. */
     poison(e, s, U_CONTROL, n);
     if (contains(n, e->anchor)) e->aborted = true;
+}
+
+
+static void init_parameters(engine *e, environment *s, TSNode method) {
+    TSNode params = sf_field(method, "parameters");
+    TSTreeCursor cursor = ts_tree_cursor_new(params);
+    if (ts_tree_cursor_goto_first_child(&cursor)) do {
+        TSNode p = ts_tree_cursor_current_node(&cursor);
+        if (!ts_node_is_named(p) || comment(p)) continue;
+        if (!is(p, "formal_parameter") || e->nparams == LF_PARAMS) {
+            e->prefix_gaps |= U_PARAMETER; e->aborted = true; break;
+        }
+        size_t index = e->nparams++;
+        e->params[index] = p;
+        s->vars[s->count++] = (variable){sf_field(p, "name"),
+            stamp(e, (origin){.direct = UINT64_C(1) << index}, p, "formal_parameter")};
+    } while (ts_tree_cursor_goto_next_sibling(&cursor));
+    ts_tree_cursor_delete(&cursor);
+}
+
+static TSNode child_kind(TSNode n, const char *kind) {
+    TSNode r = {0};
+    if (ts_node_is_null(n)) return r;
+    TSTreeCursor cursor = ts_tree_cursor_new(n);
+    if (ts_tree_cursor_goto_first_child(&cursor)) do {
+        TSNode c = ts_tree_cursor_current_node(&cursor);
+        if (is(c, kind)) { r = c; break; }
+    } while (ts_tree_cursor_goto_next_sibling(&cursor));
+    ts_tree_cursor_delete(&cursor); return r;
+}
+static bool modifier(TSNode n, const char *kind) {
+    return !ts_node_is_null(child_kind(child_kind(n, "modifiers"), kind));
+}
+/* Deliberately no name-only search across files or arbitrary receivers.
+ * Inheritance, overloads, generic method selection and nested owners are gaps.
+ * Private/static/final methods (or a final owner) cannot be overridden under
+ * ordinary Java dispatch. Instrumentation and type correctness remain outside
+ * this source-only model. */
+static TSNode summary_target(engine *e, TSNode call, size_t argc) {
+    TSNode none = {0}, body = ts_node_parent(e->method), owner = ts_node_parent(body);
+    TSNode receiver = sf_field(call, "object"), name = sf_field(call, "name");
+    if (!is(body, "class_body") || !is(owner, "class_declaration") ||
+        !is(ts_node_parent(owner), "program") ||
+        !ts_node_is_null(sf_field(owner, "superclass")) ||
+        !ts_node_is_null(sf_field(owner, "interfaces")) ||
+        !ts_node_is_null(sf_field(owner, "type_parameters")) ||
+        (!ts_node_is_null(receiver) && !is(receiver, "this")) || argc > LF_PARAMS)
+        return none;
+    const char *object_methods[] = {"wait", "notify", "notifyAll", "clone", "equals",
+                                    "finalize", "getClass", "hashCode", "toString"};
+    for (size_t i = 0; i < sizeof(object_methods) / sizeof(object_methods[0]); i++)
+        if (spells(e, name, object_methods[i])) return none;
+    TSNode target = {0}; size_t matches = 0;
+    TSTreeCursor c = ts_tree_cursor_new(body);
+    if (ts_tree_cursor_goto_first_child(&c)) do {
+        TSNode n = ts_tree_cursor_current_node(&c);
+        if (!tick(e, 0)) break;
+        if (is(n, "method_declaration") && same_name(e, sf_field(n, "name"), name)) {
+            target = n; matches++;
+        }
+    } while (ts_tree_cursor_goto_next_sibling(&c));
+    ts_tree_cursor_delete(&c);
+    if (matches != 1 || e->aborted || ts_node_is_null(sf_field(target, "body")) ||
+        spells(e, sf_field(target, "type"), "void") ||
+        modifier(target, "abstract") || modifier(target, "native") || modifier(target, "synchronized") ||
+        !ts_node_is_null(sf_field(target, "type_parameters")) ||
+        (!modifier(target, "private") && !modifier(target, "static") &&
+         !modifier(target, "final") && !modifier(owner, "final"))) return none;
+    size_t count = 0; bool valid = true;
+    c = ts_tree_cursor_new(sf_field(target, "parameters"));
+    if (ts_tree_cursor_goto_first_child(&c)) do {
+        TSNode n = ts_tree_cursor_current_node(&c);
+        if (!ts_node_is_named(n) || comment(n)) continue;
+        if (!is(n, "formal_parameter") || ++count > LF_PARAMS) { valid = false; break; }
+    } while (ts_tree_cursor_goto_next_sibling(&c));
+    ts_tree_cursor_delete(&c);
+    return valid && count == argc ? target : none;
+}
+static return_summary *get_summary(engine *e, TSNode method, unsigned *reason) {
+    summary_bank *bank = e->summaries;
+    bank->requests++;
+    for (size_t i = 0; i < bank->count; i++) if (same(bank->entries[i].method, method)) {
+        if (bank->entries[i].busy) { *reason = U_CALL | U_RECURSION; return NULL; }
+        bank->hits++; return &bank->entries[i];
+    }
+    if (bank->count == RS_METHODS || bank->depth == RS_DEPTH || bank->steps >= RS_STEPS) {
+        bank->limited = true; *reason = U_CALL | U_SUMMARY_LIMIT; return NULL;
+    }
+    return_summary *r = &bank->entries[bank->count++];
+    r->method = method; r->busy = true; bank->depth++;
+    engine *callee = calloc(1, sizeof(*callee));
+    environment *state = calloc(1, sizeof(*state));
+    if (!callee || !state) {
+        free(callee); free(state); bank->depth--; r->busy = false;
+        e->error = "out_of_memory"; e->aborted = true; *reason = U_CALL; return NULL;
+    }
+    callee->doc = e->doc; callee->method = method; callee->json = e->json;
+    callee->summaries = bank; callee->summary_mode = true; state->alive = true;
+    init_parameters(callee, state, method);
+    if (!callee->aborted) statement(callee, state, sf_field(method, "body"), 0);
+    r->returned = callee->returned;
+    /* A hidden return in unsupported control (especially finally) must not
+     * disappear just because a later literal assignment overwrites all locals. */
+    r->returned.unknown |= callee->prefix_gaps;
+    if (!callee->return_count || state->alive) r->returned.unknown |= U_RETURN;
+    if (callee->limited) { r->returned.unknown |= U_SUMMARY_LIMIT; bank->limited = true; }
+    r->nevents = callee->nevents; r->nparams = callee->nparams;
+    r->return_count = callee->return_count;
+    memcpy(r->events, callee->events, r->nevents * sizeof(event));
+    if (callee->error) { e->error = callee->error; e->aborted = true; }
+    r->busy = false; bank->depth--; free(callee); free(state); return r;
+}
+static origin summarized_call(engine *e, TSNode call, const origin *actual, size_t count) {
+    TSNode method = summary_target(e, call, count);
+    if (ts_node_is_null(method))
+        return stamp(e, unknown(U_CALL | U_TARGET | (e->aborted ? U_SUMMARY_LIMIT : 0)), call, "unresolved_call_return");
+    unsigned reason = 0; return_summary *summary = get_summary(e, method, &reason);
+    if (!summary) return stamp(e, unknown(reason), call, "unresolved_call_return");
+    origin v = {.unknown = summary->returned.unknown, .literal = summary->returned.literal};
+    for (size_t i = 0; i < count; i++) {
+        uint64_t bit = UINT64_C(1) << i;
+        if (summary->returned.direct & bit) v = join(v, actual[i]);
+        if (summary->returned.derived & bit) v = join(v, transform(actual[i]));
+    }
+    for (size_t i = 0; i < summary->nevents; i++)
+        if (summary->returned.evidence[i / 64U] & (UINT64_C(1) << (i % 64U)))
+            v = stamp(e, v, summary->events[i].node, summary->events[i].kind);
+    v = stamp(e, v, method, "return_summary_target");
+    return stamp(e, v, call, "return_summary_application");
 }
 
 static value *object(engine *e) { return yyjson_mut_obj(e->json); }
@@ -376,32 +547,59 @@ static value *render_origin(engine *e, origin v) {
         if (v.evidence[i / 64U] & (UINT64_C(1) << (i % 64U))) add(e, evidence, yyjson_mut_uint(e->json, i));
     put(e, r, "evidence_ids", evidence); return r;
 }
+static value *render_events(engine *e) {
+    value *events = array(e);
+    for (size_t i = 0; i < e->nevents; i++) {
+        value *v = object(e); num(e, v, "id", i); text(e, v, "kind", e->events[i].kind);
+        put(e, v, "source", ref(e, e->events[i].node)); add(e, events, v);
+    }
+    return events;
+}
+static value *render_summaries(engine *e) {
+    summary_bank *bank = e->summaries;
+    value *r = object(e), *items = array(e);
+    text(e, r, "schema", "cbm.java-return-summaries.v1");
+    text(e, r, "scope", "same_top_level_class_non_overridable_methods");
+    text(e, r, "cache_scope", "current_operation_context_only");
+    text(e, r, "effects", "return_dependencies_only_heap_and_exceptions_not_proved");
+    text(e, r, "security_semantics", "no_sanitizer_or_authorization_inference");
+    num(e, r, "computed_methods", bank->count); num(e, r, "requests", bank->requests);
+    num(e, r, "cache_hits", bank->hits); num(e, r, "total_steps", bank->steps);
+    num(e, r, "method_limit", RS_METHODS); num(e, r, "depth_limit", RS_DEPTH);
+    num(e, r, "total_step_limit", RS_STEPS); flag(e, r, "truncated", bank->limited);
+    for (size_t i = 0; i < bank->count; i++) {
+        return_summary *summary = &bank->entries[i];
+        engine *view = calloc(1, sizeof(*view));
+        if (!view) { e->error = "out_of_memory"; break; }
+        view->doc = e->doc; view->json = e->json; view->nevents = summary->nevents;
+        memcpy(view->events, summary->events, summary->nevents * sizeof(event));
+        value *item = object(e); num(e, item, "id", i);
+        put(e, item, "method", ref(e, summary->method));
+        num(e, item, "formal_parameter_count", summary->nparams);
+        num(e, item, "return_statements_evaluated", summary->return_count);
+        text(e, item, "parameter_index_scope", "callee_formals_not_caller_formals");
+        put(e, item, "return_relation", render_origin(view, summary->returned));
+        put(e, item, "evidence", render_events(view));
+        if (view->error) e->error = view->error;
+        free(view); add(e, items, item);
+    }
+    put(e, r, "methods", items); return r;
+}
 const char *sf_attach_local_flow(const sf_document *doc, TSNode method, TSNode call,
                                  yyjson_mut_doc *json, value *result) {
     if (!doc || !json || !result || ts_node_is_null(method) || ts_node_is_null(call)) return "invalid_local_flow_input";
     engine *e = calloc(1, sizeof(*e)); environment *s = calloc(1, sizeof(*s));
-    if (!e || !s) { free(e); free(s); return "out_of_memory"; }
-    e->doc = doc; e->anchor = call; e->json = json; s->alive = true;
-    TSNode params = sf_field(method, "parameters");
-    TSTreeCursor cursor = ts_tree_cursor_new(params);
-    if (ts_tree_cursor_goto_first_child(&cursor)) do {
-        TSNode p = ts_tree_cursor_current_node(&cursor);
-        if (!ts_node_is_named(p) || comment(p)) continue;
-        if (!is(p, "formal_parameter") || e->nparams == LF_PARAMS) {
-            e->prefix_gaps |= U_PARAMETER; e->aborted = true; break;
-        }
-        size_t index = e->nparams++;
-        e->params[index] = p;
-        s->vars[s->count++] = (variable){sf_field(p, "name"),
-            stamp(e, (origin){.direct = UINT64_C(1) << index}, p, "formal_parameter")};
-    } while (ts_tree_cursor_goto_next_sibling(&cursor));
-    ts_tree_cursor_delete(&cursor);
+    summary_bank *bank = calloc(1, sizeof(*bank));
+    if (!e || !s || !bank) { free(e); free(s); free(bank); return "out_of_memory"; }
+    e->doc = doc; e->anchor = call; e->method = method; e->json = json;
+    e->summaries = bank; s->alive = true;
+    init_parameters(e, s, method);
     for (size_t i = 1; i < doc->source_size; i++)
         if (doc->source[i - 1] == '\\' && doc->source[i] == 'u') {
             e->prefix_gaps |= U_UNICODE; e->aborted = true; break;
         }
     if (!e->aborted) statement(e, s, sf_field(method, "body"), 0);
-    value *a = yyjson_mut_obj_get(result, "arguments"), *meta = object(e), *events = array(e);
+    value *a = yyjson_mut_obj_get(result, "arguments"), *meta = object(e);
     size_t nargs = yyjson_mut_arr_size(a);
     unsigned gaps = e->prefix_gaps;
     for (size_t i = 0; i < nargs; i++) {
@@ -410,10 +608,6 @@ const char *sf_attach_local_flow(const sf_document *doc, TSNode method, TSNode c
         gaps |= v.unknown;
         put(e, yyjson_mut_arr_get(a, i), "local_value_flow", render_origin(e, v));
     }
-    for (size_t i = 0; i < e->nevents; i++) {
-        value *v = object(e); num(e, v, "id", i); text(e, v, "kind", e->events[i].kind);
-        put(e, v, "source", ref(e, e->events[i].node)); add(e, events, v);
-    }
     text(e, meta, "schema", "cbm.local-value-flow.v1");
     text(e, meta, "domain", "local_value_identity_and_explicit_expression_dependencies");
     text(e, meta, "path_feasibility", "not_evaluated");
@@ -421,11 +615,12 @@ const char *sf_attach_local_flow(const sf_document *doc, TSNode method, TSNode c
     text(e, meta, "security_verdict", "not_evaluated");
     text(e, meta, "evidence_semantics", "dependency_evidence_set_not_execution_trace");
     text(e, meta, "status", !e->found ? "anchor_not_evaluated" : gaps ? "partial" : "modeled_in_supported_subset");
-    flag(e, meta, "truncated", e->limited); num(e, meta, "steps", e->steps);
-    put(e, meta, "gaps", reason_list(e, gaps)); put(e, meta, "evidence", events);
+    flag(e, meta, "truncated", e->limited || bank->limited); num(e, meta, "steps", e->steps);
+    put(e, meta, "gaps", reason_list(e, gaps)); put(e, meta, "evidence", render_events(e));
+    put(e, meta, "return_summaries", render_summaries(e));
     put(e, result, "local_value_flow", meta);
-    if (e->limited) flag(e, result, "truncated", true);
-    const char *error = e->error; free(e); free(s); return error;
+    if (e->limited || bank->limited) flag(e, result, "truncated", true);
+    const char *error = e->error; free(e); free(s); free(bank); return error;
 }
 
 /* Composition consumes source-derived local relations, never caller-supplied

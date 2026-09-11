@@ -1,4 +1,6 @@
-# CBM Sec 0.7 开发版：局部值来源与多跳组合
+# CBM Sec 局部值来源与多跳组合
+
+版本说明：局部值流始于 0.7；0.8 开发版新增同文件受限返回摘要，见 `SECURITY_RETURN_SUMMARIES.md`。
 
 本版基于已发布的 `cbm-sec-v0.6.0-preview.1`，继续使用六个只读 MCP 工具。
 不修改主程序、目标源码、既有 Release 标签、Sulliu 或 Codex 配置。不调用大模型。
@@ -76,7 +78,7 @@ MCP 工具说明也说明新旧结果的区别。通用 CLI 不做这个操作�
 
 ## 未支持部分如何处理
 
-- 任意函数返回值不默认依赖全部实参，返回 `call_return_not_modeled`。
+- 未解析的函数返回值不默认依赖全部实参，返回 `call_return_not_modeled`。0.8 对同一顶层类中满足限定条件的辅助方法计算返回摘要，不包含外部库或通用动态分派。
 - 字段和数组元素读取返回 `heap_contents_not_modeled`。复制一个对象引用不等于追踪对象所有内容。
 - 循环、try/catch/finally、switch、标签、断言等未支持控制结构不按源码行号强行展开。
   它们在目标调用之前出现时，将当前局部状态标为可能受未知影响；目标调用位于其中时，
@@ -106,7 +108,7 @@ make -f Makefile.security test
 python3 tests/security/test_local_flow.py build/security/cbm-security-facts
 ```
 
-原 266 项测试保持不变。本轮 `test_local_flow.py` 新增 66 项不同测试，其中一项包含
+0.7 的原 266 项测试保持不变，`test_local_flow.py` 增加 66 项不同测试，其中一项包含
 32 个固定随机种子的直线赋值程序，与独立 Python 来源集合模型对照；不是 32 次重复计数。
 另含别名、覆盖、分支、提前退出、短路、求值顺序、字段/数组/未知调用、UTF-8 位置、预算、
 多跳换位、多来源和未知链路等反例。测试均通过真实 C 解析器和 MCP 子进程。
