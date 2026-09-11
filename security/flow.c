@@ -1,4 +1,5 @@
 #include "flow.h"
+#include "local_flow.h"
 #include "parser.h"
 
 #include <stdio.h>
@@ -312,6 +313,7 @@ const char *sf_attach_argument_flow(const sf_operation_request *root, const sf_f
     put(&w,flow,"truncated",yyjson_mut_bool(output,limited));
     number(&w,flow,"root_argument_total",root->call->argument_total);
     number(&w,flow,"returned_argument_paths",nargs);
+    if (!error && !w.error) error=sf_compose_local_flows(output,result,linked,count);
     for (size_t i=0;i<SF_FLOW_HOPS;i++) sf_document_free(&held[i]);
     return error ? error : w.error;
 }

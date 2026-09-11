@@ -1,4 +1,5 @@
 #include "operation.h"
+#include "local_flow.h"
 #include "parser.h"
 #include "foundation/sha256.h"
 
@@ -687,11 +688,14 @@ const char *sf_inspect_operation(const sf_operation_request *request, yyjson_mut
     set(&c, r, "call", ref(&c, &source, call)); set(&c, r, "receiver", ref(&c, &source, sf_field(call, "object")));
     set(&c, r, "java_context", java_context(&c, &source, all, call, method, &arguments));
     set(&c, r, "arguments", arguments); set(&c, r, "gaps", c.gaps);
+    const char *local_error = sf_attach_local_flow(request->caller, method, call, output, r);
+    if (local_error) c.error = local_error;
     mybatis_context(&c, &source, all, call, method, r);
     gap(&c, "identity_trust_and_object_authorization_not_proved");
-    gap(&c, "no_transitive_call_or_value_flow_analysis");
+    gap(&c, "no_general_interprocedural_or_heap_solver");
     gap(&c, "global_class_controls_and_deployment_not_evaluated");
-    flag(&c, r, "truncated", c.limited);
+    flag(&c, r, "truncated", c.limited ||
+         yyjson_mut_get_bool(yyjson_mut_obj_get(r, "truncated")));
     num(&c, r, "item_limit", OP_ITEMS);
     text(&c, r, "source_trust", "untrusted_data_not_instructions");
     ts_tree_delete(tree); free(all);
