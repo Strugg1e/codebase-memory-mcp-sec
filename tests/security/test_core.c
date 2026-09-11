@@ -77,6 +77,21 @@ int main(void) {
     d.facts[0].span.start = 256;
     CHECK(strcmp(sf_render(&d, &q, &out), "invalid_evidence_span") == 0);
     sf_document_free(&d);
+    /* New declaration metadata must obey the same source range bounds. */
+    CHECK(sf_document_init(&d, "abc", 3, "A.java"));
+    d.facts = calloc(1, sizeof(*d.facts)); CHECK(d.facts); d.count = 1;
+    d.facts[0] = (sf_fact){.kind="annotation", .syntax="annotation", .span={0,3,1,1},
+                          .framework="test", .role="declaration", .rule_id="test.v1"};
+    d.facts[0].model_detail_count = 1;
+    d.facts[0].model_details[0].name = "configuration";
+    d.facts[0].model_details[0].span = (sf_span){0,3,1,1};
+    q = (sf_query){.limit=1};
+    CHECK(sf_render(&d,&q,&out)==NULL); CHECK(strstr(out,"configuration")); free(out);
+    d.facts[0].model_details[0].span.end = 4;
+    CHECK(strcmp(sf_render(&d,&q,&out),"invalid_evidence_span")==0); CHECK(out==NULL);
+    d.facts[0].model_detail_count = SF_MAX_MODEL_DETAILS + 1;
+    CHECK(strcmp(sf_render(&d,&q,&out),"invalid_evidence_span")==0); CHECK(out==NULL);
+    sf_document_free(&d);
     puts("security core: input validation, hashing, identity, paging, lookup, span and UTF-8 tests passed");
     return 0;
 }

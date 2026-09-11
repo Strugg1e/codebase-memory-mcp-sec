@@ -278,6 +278,18 @@ static value *java_context(context *c, const sf_operation_source *s, const nodes
             f->enclosing.end != ts_node_end_byte(method)) continue;
         if (yyjson_mut_arr_size(declarations) >= OP_ITEMS) { c->limited = true; break; }
         value *v = obj(c); text(c, v, "framework", f->framework); text(c, v, "role", f->role);
+        text(c, v, "security_effect", "not_evaluated");
+        if (f->http_method) text(c, v, "http_method", f->http_method);
+        if (f->input_kind) text(c, v, "input_kind", f->input_kind);
+        if (f->control_phase) text(c, v, "control_phase", f->control_phase);
+        if (f->data_operation) text(c, v, "data_operation", f->data_operation);
+        value *expressions = obj(c);
+        for (uint32_t j = 0; j < f->model_detail_count; j++) {
+            sf_span part = f->model_details[j].span;
+            set(c, expressions, f->model_details[j].name, reference(c, s, part.start, part.end));
+        }
+        set(c, v, "expressions", expressions);
+        flag(c, v, "expression_details_truncated", f->model_details_limited);
         char id[65]; sf_fact_id(doc, f, id); text(c, v, "fact_id", id);
         set(c, v, "source", reference(c, s, f->span.start, f->span.end)); add(c, declarations, v);
     }

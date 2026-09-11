@@ -14,6 +14,7 @@ TSNode sf_single(TSNode node);
 
 typedef struct sf_models sf_models;
 sf_models *sf_models_new(sf_document *doc, TSNode root);
+void sf_model_add_detail(sf_fact *fact, const char *name, TSNode expression);
 void sf_models_apply(sf_models *models, sf_fact *fact, TSNode node);
 void sf_models_free(sf_models *models);
 

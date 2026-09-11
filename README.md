@@ -8,7 +8,7 @@
 
 ## 版本与入口
 
-- 当前功能分支：`feat/security-facts-v0.1`，开发版本 `0.9.0-dev`。
+- 当前功能分支：`feat/security-facts-v0.1`，开发版本 `0.10.0-dev`。
 - 已发布的独立预览版：[0.6.0 Preview 1](https://github.com/Strugg1e/codebase-memory-mcp-sec/releases/tag/cbm-sec-v0.6.0-preview.1)。该包不含后续开发能力。
 - fork 的 `main` 尚未合入安全模块。请以实际分支、提交和可执行文件版本为准。
 - 不使用原版 CBM 的安装脚本安装安全工具；原安装器不会自动安装这些独立可执行文件。
@@ -29,7 +29,7 @@
 | 能力 | 当前范围 |
 |---|---|
 | 语法事实 | Java、Python、JavaScript、TypeScript、TSX、Go；调用点、参数、声明、导入等 |
-| 框架语义 | Spring、FastAPI、Flask、Django、Express、NestJS、net/http、Gin 的文档化声明候选 |
+| 框架语义 | Java/Jakarta、Spring/MyBatis/JPA、Python Web/DRF、Express/NestJS/Fastify、Go HTTP/Gin/chi/Echo 的文档化声明候选；见框架范围表 |
 | 源码版本 | 启动时校验并固定明确选择的文件集合；不承诺全仓库覆盖 |
 | Java 操作 | 局部语法、显式 Mapper/MyBatis XML 关联；不证明控制生效 |
 | 值关系 | 受限 Java 局部复制、覆盖、表达式、分支及同类辅助方法返回摘要 |
@@ -75,7 +75,7 @@ python3 security/demo_context.py --mcp build/security/cbm-security-mcp
 - [产品边界与宿主职责](SECURITY_PRODUCT.md)
 - [导航交接、上下文视图与运行配置](SECURITY_INTEGRATION.md)
 - [固定快照与 MCP 启动](SECURITY_MCP.md)
-- [语法与框架候选](SECURITY_FACTS.md)
+- [语法与框架候选](SECURITY_FACTS.md)、[0.10 框架生态及限制](SECURITY_FRAMEWORKS.md)
 - [Java/MyBatis 操作上下文](SECURITY_OPERATIONS.md)
 - [显式多跳](SECURITY_FLOW.md)、[局部值流](SECURITY_LOCAL_FLOW.md)、[函数返回摘要](SECURITY_RETURN_SUMMARIES.md)
 - [历史 v0.6 预览包](SECURITY_PREVIEW.md)

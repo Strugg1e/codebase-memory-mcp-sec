@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 #define SF_SCHEMA "cbm.security-facts.v1"
-#define SF_VERSION "0.9.0-dev"
+#define SF_VERSION "0.10.0-dev"
 #ifndef SF_BUILD_ID
 #define SF_BUILD_ID "unversioned"
 #endif
@@ -18,6 +18,7 @@
 #define SF_PREVIEW_BYTES 256U
 #define SF_MAX_BINDINGS 256U
 #define SF_MAX_PAGE 200U
+#define SF_MAX_MODEL_DETAILS 8U
 
 typedef struct {
     uint32_t start, end;
@@ -37,6 +38,11 @@ typedef struct {
     /* Argument expressions are syntax slots, not expanded runtime arguments. */
     bool has_argument_expansion;
     const char *framework, *role, *rule_id, *http_method;
+    /* Declarative semantics. None of these fields establishes runtime effects. */
+    const char *input_kind, *control_phase, *data_operation, *model_gap;
+    struct { const char *name; sf_span span; } model_details[SF_MAX_MODEL_DETAILS];
+    uint32_t model_detail_count;
+    bool model_details_limited;
     sf_span import_evidence, binding_evidence, path_expression, handler;
     bool has_import_evidence, has_binding_evidence, has_path_expression, has_handler;
 } sf_fact;

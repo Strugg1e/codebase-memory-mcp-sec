@@ -32,7 +32,7 @@ static void capabilities(void) {
     fputs("{\"schema\":\"" SF_SCHEMA "\",\"version\":\"" SF_VERSION "\","
          "\"languages\":[\"java\",\"python\",\"javascript\",\"typescript\",\"tsx\",\"go\"],"
          "\"extensions\":[\".java\",\".py\",\".pyi\",\".js\",\".jsx\",\".mjs\",\".cjs\",\".ts\",\".mts\",\".cts\",\".tsx\",\".go\"],"
-         "\"frameworks\":[\"spring-mvc\",\"spring-security\",\"fastapi\",\"flask\",\"django\",\"express\",\"nestjs\",\"go-net-http\",\"gin\"],"
+         "\"frameworks\":" SF_FRAMEWORKS_JSON ","
          "\"query_filters\":[\"kind\",\"framework\",\"role\",\"enclosing_id\"],\"query_cursor\":true,"
          "\"enclosing_scope\":\"direct_children_only\","
          "\"scope\":\"single_file\",\"framework_basis\":\"import_and_syntax_candidate\","

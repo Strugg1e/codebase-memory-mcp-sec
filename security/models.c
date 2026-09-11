@@ -1,4 +1,5 @@
 #include "parser.h"
+#include "java_models.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,7 +28,7 @@ static bool identifier(TSNode n) {
     return sf_node_is(n, "identifier") || sf_node_is(n, "type_identifier") || sf_node_is(n, "package_identifier");
 }
 static bool package_allowed(const char *s) {
-    static const char *const names[] = {"fastapi", "flask", "django", "django.urls", "django.contrib.auth.decorators", "django.views.decorators.csrf", "express", "@nestjs/common", "net/http", "github.com/gin-gonic/gin"};
+    static const char *const names[] = {"fastapi", "flask", "django", "django.urls", "django.contrib.auth.decorators", "django.views.decorators.csrf", "express", "fastify", "@nestjs/common", "net/http", "github.com/gin-gonic/gin", "github.com/go-chi/chi/v5", "github.com/labstack/echo/v4", "rest_framework.decorators", "fastapi.security"};
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) if (strcmp(s, names[i]) == 0) return true;
     return strncmp(s, "org.springframework.web.bind.annotation.", sizeof("org.springframework.web.bind.annotation.") - 1) == 0 ||
            strncmp(s, "org.springframework.security.access.prepost.", sizeof("org.springframework.security.access.prepost.") - 1) == 0 ||
@@ -149,18 +150,6 @@ static TSNode python_argument(sf_models *m, TSNode call, uint32_t index, const c
     ts_tree_cursor_delete(&cursor);
     return found;
 }
-static TSNode annotation_path(sf_models *m, TSNode node) {
-    TSNode args = sf_field(node, "arguments");
-    for (uint32_t i = 0; !ts_node_is_null(args) && i < ts_node_named_child_count(args); i++) {
-        TSNode child = ts_node_named_child(args, i);
-        if (sf_node_is(child, "element_value_pair")) {
-            char key[64];
-            if (sf_node_text(m->doc, sf_field(child, "key"), key, sizeof(key)) &&
-                (strcmp(key, "path") == 0 || strcmp(key, "value") == 0)) return sf_field(child, "value");
-        } else if (sf_node_is(child, "string_literal") || sf_node_is(child, "element_value_array_initializer")) return child;
-    }
-    return (TSNode){0};
-}
 static void java_import(sf_models *m, TSNode node) {
     TSNode name = ts_node_named_child(node, 0);
     char canonical[256];
@@ -230,6 +219,8 @@ static bool imports(TSNode node, void *opaque) {
         if (!ts_node_is_null(name)) add_binding(m, name, package, node);
         else if (package_allowed(package)) {
             const char *slash = strrchr(package, '/'); const char *leaf = slash ? slash + 1 : package;
+            if (!strcmp(package, "github.com/go-chi/chi/v5")) leaf = "chi";
+            if (!strcmp(package, "github.com/labstack/echo/v4")) leaf = "echo";
             size_t leaf_len = strlen(leaf);
             if (leaf_len >= sizeof(m->bindings[0].local) || m->count >= SF_MAX_BINDINGS) m->doc->framework_bindings_limited = true;
             else {
@@ -249,6 +240,14 @@ static bool imports(TSNode node, void *opaque) {
     } else if (sf_node_is(node, "variable_declarator") && strcmp(lang, "java") != 0) {
         TSNode value = sf_field(node, "value"), name = sf_field(node, "name");
         char target[128], package[256];
+        TSNode factory = sf_call_target(value);
+        if (identifier(name) && sf_node_is(value, "call_expression") && sf_node_is(factory, "call_expression") &&
+            sf_node_text(m->doc, sf_call_target(factory), target, sizeof(target)) && !strcmp(target, "require") &&
+            literal(m, argument(factory, 0), package, sizeof(package)) && ts_node_is_null(argument(factory, 1)) &&
+            (!strcmp(package, "fastify") || !strcmp(package, "express"))) {
+            binding *b = add_binding(m, name, !strcmp(package, "fastify") ? "fastify.Instance" : "express.Router", factory);
+            if (b) { b->instance = true; b->commonjs = true; b->has_initialization = true; b->initialization = sf_location(node); }
+        }
         if (identifier(name) && sf_node_is(value, "call_expression") &&
             sf_node_text(m->doc, sf_call_target(value), target, sizeof(target)) && strcmp(target, "require") == 0 &&
             literal(m, argument(value, 0), package, sizeof(package)) && ts_node_is_null(argument(value, 1))) {
@@ -270,6 +269,10 @@ static TSNode assignment_name(TSNode n, TSNode *value) {
 }
 static const char *instance_type(const char *s) {
     if (strcmp(s, "fastapi.FastAPI") == 0 || strcmp(s, "fastapi.APIRouter") == 0 || strcmp(s, "flask.Flask") == 0 || strcmp(s, "flask.Blueprint") == 0) return s;
+    if (!strcmp(s, "fastify") || !strcmp(s, "fastify.fastify") || !strcmp(s, "fastify.default")) return "fastify.Instance";
+    if (!strcmp(s, "github.com/go-chi/chi/v5.NewRouter") || !strcmp(s, "chi.Router.With")) return "chi.Router";
+    if (!strcmp(s, "github.com/labstack/echo/v4.New")) return "echo.Engine";
+    if (!strcmp(s, "echo.Engine.Group") || !strcmp(s, "echo.Group.Group")) return "echo.Group";
     if (strcmp(s, "express") == 0 || strcmp(s, "express.Router") == 0) return "express.Router";
     if (strcmp(s, "net/http.NewServeMux") == 0) return "net/http.ServeMux";
     if (strcmp(s, "github.com/gin-gonic/gin.New") == 0 || strcmp(s, "github.com/gin-gonic/gin.Default") == 0 || strcmp(s, "gin.Engine.Group") == 0) return "gin.Engine";
@@ -279,6 +282,11 @@ static bool factories(TSNode node, void *opaque) {
     sf_models *m = opaque;
     TSNode value, name = assignment_name(node, &value);
     if (!identifier(name) || ts_node_is_null(value)) return true;
+    TSNode factory_args = sf_field(value, "arguments");
+    for (uint32_t i = 0; !ts_node_is_null(factory_args) && i < ts_node_named_child_count(factory_args); i++) {
+        TSNode arg = ts_node_named_child(factory_args, i);
+        if (sf_node_is(arg, "spread_element") || sf_node_is(arg, "list_splat") || sf_node_is(arg, "dictionary_splat") || sf_node_is(arg, "variadic_argument")) return true;
+    }
     char canonical[384];
     binding *owner = resolve(m, sf_call_target(value), canonical, sizeof(canonical));
     const char *instance = owner ? instance_type(canonical) : NULL;
@@ -389,35 +397,158 @@ static void path_and_handler(sf_fact *f, TSNode path, TSNode handler) {
     if (!ts_node_is_null(path)) { f->has_path_expression = true; f->path_expression = sf_location(path); }
     if (!ts_node_is_null(handler)) { f->has_handler = true; f->handler = sf_location(handler); }
 }
+/* Only unique direct literal fields are extracted. Spreads, computed keys,
+ * accessors and duplicate names can change values, so retain the raw call. */
+static bool object_field(sf_models *m, TSNode object, const char *wanted, TSNode *out) {
+    *out = (TSNode){0};
+    if (!sf_node_is(object, "object")) return false;
+    char names[64][64]; size_t count = 0;
+    TSTreeCursor cursor = ts_tree_cursor_new(object); bool valid = true;
+    if (ts_tree_cursor_goto_first_child(&cursor)) do {
+        TSNode item = ts_tree_cursor_current_node(&cursor);
+        if (!ts_node_is_named(item) || sf_node_is(item, "comment")) continue;
+        TSNode key = {0}, value = {0}; char name[64];
+        if (sf_node_is(item,"pair")) { key = sf_field(item,"key"); value = sf_field(item,"value"); }
+        else if (sf_node_is(item,"shorthand_property_identifier")) key = value = item;
+        else if (sf_node_is(item,"method_definition") && !keyword(item,"get") && !keyword(item,"set")) {
+            key = sf_field(item,"name"); value = item;
+        } else { valid = false; break; }
+        if (sf_node_is(key,"computed_property_name") || count == 64 ||
+            !(literal(m,key,name,sizeof(name)) || sf_node_text(m->doc,key,name,sizeof(name)))) { valid = false; break; }
+        for (size_t i = 0; i < count; i++) if (!strcmp(names[i],name)) valid = false;
+        if (!valid) break;
+        strcpy(names[count++],name);
+        if (!strcmp(name,wanted)) *out = value;
+    } while (ts_tree_cursor_goto_next_sibling(&cursor));
+    ts_tree_cursor_delete(&cursor);
+    return valid;
+}
+
+static void python_web_extra(sf_models *m, sf_fact *f, TSNode node, binding *b, const char *member, bool fastapi) {
+    const char *fw = fastapi ? "fastapi" : "flask";
+    if (!strcmp(member, fastapi ? "include_router" : "register_blueprint") && !decorated(node)) {
+        TSNode router = python_argument(m,node,0,fastapi ? "router" : "blueprint",NULL);
+        if (ts_node_is_null(router)) return;
+        mark(f,b,fw,"router_attachment","python.router-attachment.v1");
+        sf_model_add_detail(f,"router",router);
+        sf_model_add_detail(f,"prefix",python_argument(m,node,UINT32_MAX,fastapi ? "prefix" : "url_prefix",NULL));
+        sf_model_add_detail(f,"dependencies",python_argument(m,node,UINT32_MAX,"dependencies",NULL));
+    } else if (!fastapi && !strcmp(member,"add_url_rule") && !decorated(node)) {
+        TSNode path = python_argument(m,node,0,"rule",NULL);
+        if (ts_node_is_null(path)) return;
+        mark(f,b,fw,"route_declaration","flask.add-url-rule.v1"); f->http_method = "DECLARED_OR_FRAMEWORK_DEFAULT";
+        path_and_handler(f,path,python_argument(m,node,2,"view_func",NULL));
+        sf_model_add_detail(f,"endpoint_name",python_argument(m,node,1,"endpoint",NULL));
+        sf_model_add_detail(f,"methods",python_argument(m,node,UINT32_MAX,"methods",NULL));
+    } else if (fastapi && ((!strcmp(member,"websocket") && decorated(node)) || !strcmp(member,"add_api_websocket_route"))) {
+        TSNode path = python_argument(m,node,0,"path",NULL);
+        TSNode handler = !strcmp(member,"add_api_websocket_route") ? python_argument(m,node,1,"endpoint",NULL) : (TSNode){0};
+        if (ts_node_is_null(path) || (!strcmp(member,"add_api_websocket_route") && ts_node_is_null(handler))) return;
+        mark(f,b,fw,"websocket_route_declaration","fastapi.websocket.v1");
+        path_and_handler(f,path,handler);
+    } else if (fastapi && !strcmp(b->canonical,"fastapi.FastAPI") && !strcmp(member,"add_middleware") && !decorated(node)) {
+        TSNode middleware = python_argument(m,node,0,"middleware_class",NULL);
+        if (ts_node_is_null(middleware)) return;
+        mark(f,b,fw,"middleware_attachment","fastapi.middleware.v1");
+        sf_model_add_detail(f,"middleware",middleware);
+    } else if (fastapi && !strcmp(b->canonical,"fastapi.FastAPI") && !strcmp(member,"middleware") && decorated(node)) {
+        mark(f,b,fw,"request_hook_declaration","fastapi.middleware-decorator.v1"); f->control_phase = "around_request";
+    } else if (!fastapi && !strcmp(member,"endpoint") && decorated(node)) {
+        mark(f,b,fw,"handler_alias_declaration","flask.endpoint.v1");
+        sf_model_add_detail(f,"endpoint_name",python_argument(m,node,0,"endpoint",NULL));
+    }
+}
+
+static void fastify_model(sf_models *m, sf_fact *f, TSNode node, binding *b, const char *member) {
+    TSNode a = argument(node,0), second = argument(node,1), third = argument(node,2), path = {0}, handler = {0}, methods = {0};
+    const char *method = http_method(member,false);
+    if (!strcmp(member,"route") && f->argument_total == 1) {
+        TSNode alias = {0};
+        if (!object_field(m,a,"url",&path) || !object_field(m,a,"path",&alias) ||
+            !object_field(m,a,"method",&methods) || !object_field(m,a,"handler",&handler)) {
+            f->model_gap = "fastify_dynamic_or_ambiguous_route_options"; return;
+        }
+        if (!ts_node_is_null(path) && !ts_node_is_null(alias)) { f->model_gap = "fastify_conflicting_route_paths"; return; }
+        if (ts_node_is_null(path)) path = alias;
+        if (ts_node_is_null(path) || ts_node_is_null(methods) || ts_node_is_null(handler)) {
+            f->model_gap = "fastify_missing_explicit_route_fields"; return;
+        }
+        mark(f,b,"fastify","route_declaration","fastify.object-route.v1");
+        f->http_method = "DECLARED_IN_ARGUMENTS";
+        path_and_handler(f,path,handler); sf_model_add_detail(f,"methods",methods); sf_model_add_detail(f,"options",a);
+    } else if ((method || !strcmp(member,"trace")) && (f->argument_total == 2 || f->argument_total == 3)) {
+        if (!method) method = "TRACE";
+        path = a;
+        if (sf_node_is(second,"object")) {
+            if (!object_field(m,second,"handler",&handler)) { f->model_gap = "fastify_dynamic_or_ambiguous_route_options"; return; }
+            if (!ts_node_is_null(handler) && !ts_node_is_null(third)) { f->model_gap = "fastify_duplicate_handler"; return; }
+            if (!ts_node_is_null(third)) handler = third;
+            if (ts_node_is_null(handler)) { f->model_gap = "fastify_missing_explicit_handler"; return; }
+        } else if (!ts_node_is_null(third)) handler = third;
+        else if (sf_node_is(second,"arrow_function") || sf_node_is(second,"function_expression")) handler = second;
+        mark(f,b,"fastify","route_declaration","fastify.shorthand-route.v1"); f->http_method = method;
+        path_and_handler(f,path,handler);
+        if (ts_node_is_null(handler)) { sf_model_add_detail(f,"handler_or_options",second); f->model_gap = "fastify_handler_or_options_not_resolved"; }
+        else if (sf_node_is(second,"object") || !ts_node_is_null(third)) sf_model_add_detail(f,"options",second);
+    } else if (!strcmp(member,"register") && f->argument_total >= 1 && f->argument_total <= 2) {
+        mark(f,b,"fastify","plugin_registration","fastify.plugin.v1");
+        sf_model_add_detail(f,"plugin",a); sf_model_add_detail(f,"options",second);
+        TSNode prefix = {0}; if (object_field(m,second,"prefix",&prefix)) sf_model_add_detail(f,"prefix",prefix);
+    } else if (!strcmp(member,"addHook") && f->argument_total == 2) {
+        char hook[64]; if (!literal(m,a,hook,sizeof(hook))) return;
+        const char *const before[] = {"onRequest","preParsing","preValidation","preHandler"};
+        const char *const after[] = {"preSerialization","onSend","onResponse","onError","onTimeout","onRequestAbort"};
+        const char *phase = NULL;
+        for (size_t i=0;i<sizeof(before)/sizeof(before[0]);i++) if (!strcmp(hook,before[i])) phase="before_handler";
+        for (size_t i=0;i<sizeof(after)/sizeof(after[0]);i++) if (!strcmp(hook,after[i])) phase="response_or_error_lifecycle";
+        if (!phase) return;
+        mark(f,b,"fastify","request_hook_declaration","fastify.hook.v1"); f->control_phase=phase;
+        sf_model_add_detail(f,"hook",a); path_and_handler(f,(TSNode){0},second);
+    }
+}
+
+static void go_router_model(sf_fact *f, TSNode node, binding *b, const char *member) {
+    bool echo = !strcmp(b->canonical,"echo.Engine") || !strcmp(b->canonical,"echo.Group");
+    const char *fw = echo ? "echo" : "chi", *method = NULL;
+    static const char *const chi_methods[] = {"Get","Post","Put","Patch","Delete","Head","Options","Trace","Connect"};
+    static const char *const verbs[] = {"GET","POST","PUT","PATCH","DELETE","HEAD","OPTIONS","TRACE","CONNECT"};
+    for (size_t i=0;i<sizeof(verbs)/sizeof(verbs[0]);i++) if (!strcmp(member,echo ? verbs[i] : chi_methods[i])) method=verbs[i];
+    bool all = !strcmp(member,echo ? "Any" : "Handle") || (!echo && !strcmp(member,"HandleFunc"));
+    if ((method || all) && f->argument_total >= 2 && (echo || f->argument_total == 2)) {
+        mark(f,b,fw,"route_declaration",echo ? "echo.route.v1" : "chi.route.v1");
+        f->http_method = method ? method : "ALL";
+        /* Echo's handler is argument 1; later arguments are middleware. */
+        path_and_handler(f,argument(node,0),argument(node,1));
+    } else if ((!strcmp(member,echo ? "Add" : "Method") || !strcmp(member,echo ? "Match" : "MethodFunc")) &&
+               f->argument_total >= 3 && (echo || f->argument_total == 3)) {
+        mark(f,b,fw,"route_declaration",echo ? "echo.method-route.v1" : "chi.method-route.v1");
+        f->http_method="DECLARED_IN_ARGUMENTS";
+        path_and_handler(f,argument(node,1),argument(node,2)); sf_model_add_detail(f,"methods",argument(node,0));
+    } else if ((!strcmp(member,"Use") || (echo && !strcmp(b->canonical,"echo.Engine") && !strcmp(member,"Pre")) ||
+                (!echo && !strcmp(member,"With"))) && f->argument_total) {
+        mark(f,b,fw,"middleware_attachment",echo ? "echo.middleware.v1" : "chi.middleware.v1");
+        f->control_phase = echo && !strcmp(member,"Pre") ? "before_routing" : "routing_pipeline_candidate";
+    } else if (!echo && !strcmp(member,"Mount") && f->argument_total==2) {
+        mark(f,b,fw,"router_attachment","chi.mount.v1");
+        sf_model_add_detail(f,"prefix",argument(node,0)); sf_model_add_detail(f,"router",argument(node,1));
+    } else if ((echo && !strcmp(member,"Group") && f->argument_total) ||
+               (!echo && ((!strcmp(member,"Route") && f->argument_total==2) || (!strcmp(member,"Group") && f->argument_total==1)))) {
+        mark(f,b,fw,"route_group_declaration",echo ? "echo.group.v1" : "chi.group.v1");
+        if (echo || !strcmp(member,"Route")) sf_model_add_detail(f,"prefix",argument(node,0));
+        if (!echo) sf_model_add_detail(f,"callback",argument(node,!strcmp(member,"Route") ? 1 : 0));
+    }
+}
+
 static void annotation_model(sf_models *m, sf_fact *f, TSNode node) {
     char canonical[384]; TSNode name = sf_field(node, "name");
     binding *b = resolve(m, name, canonical, sizeof(canonical));
-    if (!b && (!sf_node_text(m->doc, name, canonical, sizeof(canonical)) || !package_allowed(canonical))) return;
-    static const char *const routes[] = {"GetMapping", "PostMapping", "PutMapping", "PatchMapping", "DeleteMapping", "RequestMapping"};
-    static const char *const methods[] = {"GET", "POST", "PUT", "PATCH", "DELETE", "DECLARED_IN_ARGUMENTS"};
-    for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
-        char expected[256]; join(expected, sizeof(expected), "org.springframework.web.bind.annotation", routes[i]);
-        if (strcmp(canonical, expected) == 0) {
-            bool prefix = f->has_enclosing && (strcmp(f->enclosing_kind, "class_declaration") == 0 || strcmp(f->enclosing_kind, "interface_declaration") == 0);
-            mark(f, b, "spring-mvc", prefix ? "route_prefix_declaration" : "route_declaration", "spring.mapping.v1");
-            f->http_method = methods[i]; path_and_handler(f, annotation_path(m, node), (TSNode){0}); return;
-        }
+    if (!b && (!sf_node_text(m->doc, name, canonical, sizeof(canonical)) || !strchr(canonical,'.'))) return;
+    if (sf_java_annotation_apply(m->doc, f, node, canonical) && b) {
+        f->has_import_evidence = true; f->import_evidence = b->evidence;
     }
-    static const char *const inputs[] = {"RequestParam", "RequestBody", "PathVariable", "RequestHeader", "CookieValue", "RequestPart", "ModelAttribute"};
-    for (size_t i = 0; i < sizeof(inputs) / sizeof(inputs[0]); i++) {
-        char expected[256]; join(expected, sizeof(expected), "org.springframework.web.bind.annotation", inputs[i]);
-        if (strcmp(canonical, expected) == 0) { mark(f, b, "spring-mvc", "request_input_declaration", "spring.input.v1"); return; }
-    }
-    static const char *const controls[] = {"PreAuthorize", "PostAuthorize", "PreFilter", "PostFilter"};
-    for (size_t i = 0; i < sizeof(controls) / sizeof(controls[0]); i++) {
-        char expected[256]; join(expected, sizeof(expected), "org.springframework.security.access.prepost", controls[i]);
-        if (strcmp(canonical, expected) == 0) { mark(f, b, "spring-security", "authorization_declaration", "spring.method-security.v1"); return; }
-    }
-    if (strcmp(canonical, "org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity") == 0)
-        mark(f, b, "spring-security", "security_configuration_declaration", "spring.method-security-enable.v1");
 }
 
-void sf_models_apply(sf_models *m, sf_fact *f, TSNode node) {
+static void apply_model(sf_models *m, sf_fact *f, TSNode node) {
     if (!m || !m->usable || f->syntax_has_error) return;
     if (strcmp(f->kind, "annotation") == 0) { annotation_model(m, f, node); return; }
     bool decorator = strcmp(f->kind, "decorator") == 0;
@@ -427,6 +558,33 @@ void sf_models_apply(sf_models *m, sf_fact *f, TSNode node) {
     char canonical[384]; binding *b = resolve(m, target, canonical, sizeof(canonical));
     if (!b) return;
     const char *member = strrchr(canonical, '.'); member = member ? member + 1 : canonical;
+    if (b->instance && !strcmp(b->canonical,"fastify.Instance")) { fastify_model(m,f,node,b,member); return; }
+    if (b->instance && (!strcmp(b->canonical,"chi.Router") || !strcmp(b->canonical,"echo.Engine") || !strcmp(b->canonical,"echo.Group"))) {
+        go_router_model(f,node,b,member); return;
+    }
+    if (!b->instance && !strncmp(canonical,"rest_framework.decorators.",26) && decorated(node) && !strchr(canonical+26,'.')) {
+        if (!strcmp(member,"api_view")) {
+            mark(f,b,"django-rest-framework","route_handler_declaration","drf.api-view.v1");
+            f->http_method="DECLARED_OR_FRAMEWORK_DEFAULT"; sf_model_add_detail(f,"methods",argument(node,0));
+        } else if (!strcmp(member,"action")) {
+            mark(f,b,"django-rest-framework","route_action_declaration","drf.action.v1");
+            sf_model_add_detail(f,"methods",python_argument(m,node,0,"methods",NULL));
+            sf_model_add_detail(f,"detail",python_argument(m,node,1,"detail",NULL));
+            sf_model_add_detail(f,"url_path",python_argument(m,node,2,"url_path",NULL));
+        } else if (!strcmp(member,"permission_classes") || !strcmp(member,"authentication_classes") || !strcmp(member,"throttle_classes")) {
+            mark(f,b,"django-rest-framework","control_declaration","drf.policy.v1"); f->control_phase="before_handler";
+            sf_model_add_detail(f,"classes",argument(node,0));
+        }
+        return;
+    }
+    if (!b->instance && !strncmp(canonical,"fastapi.security.",17) && !strchr(canonical+17,'.')) {
+        const char *const schemes[] = {"HTTPBasic","HTTPBearer","OAuth2PasswordBearer","OAuth2AuthorizationCodeBearer","APIKeyHeader","APIKeyQuery","APIKeyCookie"};
+        for (size_t i=0;i<sizeof(schemes)/sizeof(schemes[0]);i++) if (!strcmp(member,schemes[i])) {
+            mark(f,b,"fastapi","security_scheme_declaration","fastapi.security-scheme.v1");
+            sf_model_add_detail(f,"auto_error",python_argument(m,node,UINT32_MAX,"auto_error",NULL));
+            sf_model_add_detail(f,"credential_name",python_argument(m,node,UINT32_MAX,"name",NULL)); return;
+        }
+    }
     if (!b->instance && (strcmp(canonical, "fastapi.Depends") == 0 || strcmp(canonical, "fastapi.Security") == 0)) {
         mark(f, b, "fastapi", strcmp(member, "Depends") == 0 ? "dependency_declaration" : "security_dependency_declaration", "fastapi.dependency.v1"); return;
     }
@@ -449,10 +607,15 @@ void sf_models_apply(sf_models *m, sf_fact *f, TSNode node) {
             TSNode handler = registration ? python_argument(m, node, 1, "endpoint", NULL) : (TSNode){0};
             if (ts_node_is_null(path) || (registration && ts_node_is_null(handler))) return;
             mark(f, b, fw, "route_declaration", "python.web-route.v1"); f->http_method = method ? method : "DECLARED_OR_FRAMEWORK_DEFAULT";
-            path_and_handler(f, path, handler); return;
+            path_and_handler(f, path, handler);
+            sf_model_add_detail(f,"methods",python_argument(m,node,UINT32_MAX,"methods",NULL));
+            sf_model_add_detail(f,"dependencies",python_argument(m,node,UINT32_MAX,"dependencies",NULL));
+            return;
         }
-        if (!fastapi && decorated(node) && (strcmp(member, "before_request") == 0 || strcmp(member, "after_request") == 0))
+        if (!fastapi && decorated(node) && (strcmp(member, "before_request") == 0 || strcmp(member, "after_request") == 0)) {
             mark(f, b, fw, "request_hook_declaration", "flask.request-hook.v1");
+            f->control_phase = !strcmp(member,"before_request") ? "before_handler" : "after_handler";
+        } else python_web_extra(m,f,node,b,member,fastapi);
         return;
     }
     if (!b->instance && (strcmp(canonical, "django.urls.path") == 0 || strcmp(canonical, "django.urls.re_path") == 0)) {
@@ -499,4 +662,17 @@ void sf_models_apply(sf_models *m, sf_fact *f, TSNode node) {
             path_and_handler(f, argument(node, 0), argument(node, f->argument_total - 1));
         } else if (strcmp(member, "Use") == 0 && f->argument_total >= 1) mark(f, b, "gin", "middleware_attachment", "gin.middleware.v1");
     }
+}
+
+void sf_model_add_detail(sf_fact *f, const char *name, TSNode node) {
+    if (ts_node_is_null(node)) return;
+    for (uint32_t i = 0; i < f->model_detail_count; i++)
+        if (!strcmp(f->model_details[i].name, name)) return;
+    if (f->model_detail_count >= SF_MAX_MODEL_DETAILS) { f->model_details_limited = true; return; }
+    f->model_details[f->model_detail_count].name = name;
+    f->model_details[f->model_detail_count++].span = sf_location(node);
+}
+void sf_models_apply(sf_models *m, sf_fact *f, TSNode node) {
+    apply_model(m, f, node);
+    if (f->framework) sf_model_add_detail(f, "declaration_arguments", sf_field(node, "arguments"));
 }

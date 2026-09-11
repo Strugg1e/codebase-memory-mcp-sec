@@ -133,7 +133,7 @@ static void span(writer *w, const sf_document *d, sf_span p) {
 }
 static bool fact_valid(const sf_document *d, const sf_fact *f) {
     if (!f->kind || !f->syntax || !span_valid(d, f->span) || f->argument_count > SF_MAX_ARGUMENTS ||
-        f->argument_count > f->argument_total || (f->argument_count && !f->arguments) ||
+        f->argument_count > f->argument_total || f->model_detail_count > SF_MAX_MODEL_DETAILS || (f->argument_count && !f->arguments) ||
         (f->has_name && !span_valid(d, f->name)) || (f->has_receiver && !span_valid(d, f->receiver)) ||
         (f->has_enclosing && (!f->enclosing_kind || !span_valid(d, f->enclosing))) ||
         (f->framework && (!f->role || !f->rule_id)) ||
@@ -141,6 +141,8 @@ static bool fact_valid(const sf_document *d, const sf_fact *f) {
         (f->has_binding_evidence && !span_valid(d, f->binding_evidence)) ||
         (f->has_path_expression && !span_valid(d, f->path_expression)) ||
         (f->has_handler && !span_valid(d, f->handler))) return false;
+    for (uint32_t i = 0; i < f->model_detail_count; i++)
+        if (!f->model_details[i].name || !span_valid(d, f->model_details[i].span)) return false;
     for (uint32_t i = 0; i < f->argument_count; i++)
         if (!span_valid(d, f->arguments[i]) || f->arguments[i].start < f->span.start || f->arguments[i].end > f->span.end) return false;
     return true;
@@ -156,6 +158,18 @@ static void framework(writer *w, const sf_document *d, const sf_fact *f) {
     if (f->has_path_expression) { emit(w, ",\"path_expression\":"); span(w, d, f->path_expression); }
     if (f->has_handler) { emit(w, ",\"handler_expression\":"); span(w, d, f->handler); }
     if (f->http_method) { emit(w, ",\"http_method\":"); text(w, f->http_method); }
+    if (f->input_kind) { emit(w, ",\"input_kind\":"); text(w, f->input_kind); }
+    if (f->control_phase) { emit(w, ",\"control_phase\":"); text(w, f->control_phase); }
+    if (f->data_operation) { emit(w, ",\"data_operation\":"); text(w, f->data_operation); }
+    if (f->model_detail_count) {
+        emit(w, ",\"expressions\":{");
+        for (uint32_t i = 0; i < f->model_detail_count; i++) {
+            if (i) emit(w, ",");
+            text(w, f->model_details[i].name); emit(w, ":"); span(w, d, f->model_details[i].span);
+        }
+        emit(w, "}");
+    }
+    emit(w, ",\"expression_details_truncated\":"); boolean(w, f->model_details_limited);
     emit(w, ",\"full_route_resolution\":\"not_attempted\",\"runtime_binding\":\"not_verified\"}");
 }
 static void fact(writer *w, const sf_document *d, const sf_fact *f) {
@@ -185,6 +199,7 @@ static void fact(writer *w, const sf_document *d, const sf_fact *f) {
     }
     if (strcmp(f->kind, "annotation") == 0 || strcmp(f->kind, "decorator") == 0)
         emit(w, ",\"security_effect\":\"not_evaluated\"");
+    if (f->model_gap) { emit(w, ",\"framework_model_gap\":"); text(w, f->model_gap); }
     framework(w, d, f); emit(w, "}");
 }
 

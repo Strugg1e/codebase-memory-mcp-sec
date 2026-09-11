@@ -1,3 +1,5 @@
+> 0.10 框架扩展见 [SECURITY_FRAMEWORKS.md](SECURITY_FRAMEWORKS.md)。下列历史范围不是新增生态的完整清单；语言分析深度没有自动提升。
+
 # 安全事实工具 v0.3
 
 `cbm-security-facts` 是可选的纯 C 源码证据工具，不是完整 SAST，也不是完整安全语义图。
