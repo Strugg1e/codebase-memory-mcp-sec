@@ -1,5 +1,7 @@
 # 安全证据 MCP v0.5
 
+> 0.11 开发版补充：新增第八个只读工具 `query_entry_points`，以及配套工具使用技能和默认关闭的可选提醒钩子。见 [入口关系](SECURITY_ENTRY_POINTS.md) 与 [Agent 配套](SECURITY_AGENT_GUIDANCE.md)。以下旧版范围保留。
+
 
 > 当前 0.9 开发版共七个工具，并新增产品能力说明、位置解析和操作视图。见 [当前接入说明](SECURITY_INTEGRATION.md)。下文六工具和无多跳描述属于历史版本范围。
 `cbm-security-mcp` 是独立的纯 C 只读证据服务，直接复用已有解析和查询核心。

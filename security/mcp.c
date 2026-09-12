@@ -2,6 +2,7 @@
 #include "facts.h"
 #include "capabilities.h"
 #include "agent_views.h"
+#include "entry_points.h"
 #include "operation.h"
 #include "flow.h"
 #include "foundation/sha256.h"
@@ -34,6 +35,9 @@ typedef struct {
     source_file files[SM_FILES];
     size_t count, total, supported, cached_index;
     sf_document cached;
+    TSTree *cached_tree;
+    yyjson_doc *entry_doc;
+    size_t entry_builds, entry_hits;
     bool has_cache;
     unsigned state;
     size_t parses, hits, failures;
@@ -163,8 +167,10 @@ static const char *analyze(server *s, source_file *f) {
     size_t index = (size_t)(f - s->files);
     if (s->has_cache && s->cached_index == index) { s->hits++; return NULL; }
     sf_document_free(&s->cached); s->has_cache = false;
+    if(s->cached_tree) { ts_tree_delete(s->cached_tree); s->cached_tree=NULL; }
+    if(s->entry_doc) { yyjson_doc_free(s->entry_doc); s->entry_doc=NULL; }
     s->cached = f->identity; s->parses++;
-    const char *error = sf_extract(&s->cached);
+    const char *error = sf_extract_tree(&s->cached, &s->cached_tree);
     if (error) { f->failure = error; s->failures++; sf_document_free(&s->cached); return error; }
     s->cached_index = index; s->has_cache = true;
     return NULL;
@@ -190,12 +196,16 @@ static const field location_fields[] = {{"snapshot_id",true,false,64},{"path",tr
     {"start_byte",false,true,SF_MAX_SOURCE},{"end_byte",false,true,SF_MAX_SOURCE},
     {"kind",false,false,32},{"name",false,false,256},{"limit",false,true,200},
     {"cursor",false,false,88},{NULL,false,false,0}};
+static const field entry_fields[] = {{"snapshot_id",true,false,64},{"framework",false,false,32},
+    {"path_prefix",false,false,1024},{"handler",false,false,512},{"route_path",false,false,1024},
+    {"entry_id",false,false,64},{"cursor",false,false,160},{"limit",false,true,50},{NULL,false,false,0}};
 static const field operation_fields[] = {{"snapshot_id",true,false,64},{"path",true,false,1024},
     {"analysis_id",true,false,64},{"call_id",true,false,64},{"mapper_path",false,false,1024},
     {"mapping_path",false,false,1024},{"upstream_calls",false,FIELD_CALL_PATH,SF_FLOW_HOPS},
     {"view",false,false,16},{"argument_index",false,true,63},{"expect_context",false,false,64},{NULL,false,false,0}};
 typedef struct { const char *name, *description; const field *fields; } tool;
 static const tool tools[] = {
+    {"query_entry_points", "List Spring MVC declaration-based entry contexts over the pinned file set. Optional path_prefix uses path-component boundaries; handler, route_path and entry_id are exact filters. Unknown path compositions remain candidates under route_path filtering. Follow page.next_cursor even on empty pages; coverage is per page, never whole-repository proof. At most 16 files or 2 MiB are visited per page. Inputs, class/method controls and source references are included; controller registration, external URL, request matching and authorization remain unverified. Reuse call_query for direct handler calls.", entry_fields},
     {"get_snapshot_info", "Describe the pinned explicit file set and real parser cache counters. Not repository coverage or a security verdict.", info_fields},
     {"list_snapshot_files", "List only files in the startup-pinned snapshot, including unsupported files. Use returned next_cursor.", list_fields},
     {"query_security_facts", "Query source-bound facts with exact AND filters. Repeat filters on continuation. Framework models are candidates, not protection proofs.", query_fields},
@@ -302,7 +312,10 @@ static JV *snapshot_info(server *s, JD *d) {
     put(d,operations,"requests",number(d,s->operation_requests));
     put(d,operations,"parse_attempts",number(d,s->operation_parses));
     put(d,operations,"cached",boolean(d,false));
-    put(d,r,"operation_context",operations); return r;
+    put(d,r,"operation_context",operations);
+    JV *entry=object(d); put(d,entry,"schema",text(d,SF_ENTRY_SCHEMA));
+    put(d,entry,"catalog_builds",number(d,s->entry_builds)); put(d,entry,"cache_hits",number(d,s->entry_hits));
+    put(d,entry,"capacity_files",number(d,1));put(d,r,"entry_points",entry); return r;
 }
 static JV *file_list(server *s, JD *d, yyjson_val *args, const char **error) {
     size_t offset=0, limit=50; const char *c=str(args,"cursor"), *rest=NULL;
@@ -528,6 +541,90 @@ static JV *operation_context(server *s, JD *d, source_file *f, yyjson_val *args,
     if (size>SF_MAX_OUTPUT) { *error="output_limit_exceeded"; return NULL; }
     return projected;
 }
+
+static bool entry_scope(const char *path,const char *prefix) {
+    if(!prefix)return true;
+    size_t n=strlen(prefix);return !strncmp(path,prefix,n)&&(path[n]==0||path[n]=='/');
+}
+static bool entry_matches(yyjson_val *entry,yyjson_val *args,bool *uncertain) {
+    const char *id=str(args,"entry_id"),*handler=str(args,"handler"),*route=str(args,"route_path");
+    *uncertain=false;
+    if(id&&!equal(id,str(entry,"entry_id")))return false;
+    if(handler&&!equal(handler,str(entry,"handler")))return false;
+    if(!route)return true;
+    yyjson_val *paths=get(entry,"declared_paths");
+    if(!yyjson_arr_size(paths)){*uncertain=true;return true;}
+    size_t i,n;yyjson_val *v;
+    yyjson_arr_foreach(paths,i,n,v)if(equal(route,yyjson_get_str(v)))return true;
+    return false;
+}
+static JV *query_entries(server *s,JD *d,yyjson_val *args,const char **error) {
+    const char *prefix=str(args,"path_prefix"),*framework=str(args,"framework");
+    const char *handler=str(args,"handler"),*route=str(args,"route_path"),*entry_id=str(args,"entry_id");
+    if((prefix&&!logical_path(prefix)) || (entry_id&&!sf_digest_valid(entry_id))){*error="invalid_entry_filter";return NULL;}
+    if(framework&&!equal(framework,"spring-mvc")){*error="unsupported_entry_framework";return NULL;}
+    JV *identity=object(d);put(d,identity,"snapshot_id",text(d,s->snapshot_id));
+    put(d,identity,"schema",text(d,SF_ENTRY_SCHEMA));put(d,identity,"build_id",text(d,SF_BUILD_ID));
+    put(d,identity,"path_prefix",text(d,prefix?prefix:""));put(d,identity,"handler",text(d,handler?handler:""));
+    put(d,identity,"route_path",text(d,route?route:""));put(d,identity,"entry_id",text(d,entry_id?entry_id:""));
+    char query_id[65];size_t length=0;char *serialized=yyjson_mut_val_write(identity,0,&length);
+    if(!serialized)oom();
+    cbm_sha256_hex(serialized,length,query_id);free(serialized);
+    size_t file_index=0,entry_offset=0,limit=20;const char *cursor=str(args,"cursor");
+    if(get(args,"limit"))limit=(size_t)yyjson_get_uint(get(args,"limit"));
+    if(cursor){
+        if(strlen(cursor)<68 || strncmp(cursor,query_id,64)||cursor[64]!='/'){*error="entry_query_mismatch";return NULL;}
+        const char *slash=strchr(cursor+65,'/');char part[24];
+        if(!slash || (size_t)(slash-cursor-65)>=sizeof(part)){*error="invalid_entry_cursor";return NULL;}
+        memcpy(part,cursor+65,(size_t)(slash-cursor-65));part[slash-cursor-65]=0;
+        if(!decimal(part,s->count,&file_index)||!decimal(slash+1,SF_ENTRY_MAX_RECORDS,&entry_offset)||
+            (file_index==s->count&&entry_offset)){*error="invalid_entry_cursor";return NULL;}
+    }
+    JV *result=object(d),*entries=array(d),*coverage=array(d),*page=object(d);
+    size_t visited=0,bytes=0,returned=0,payload=0;bool incomplete=false;
+    while(file_index<s->count && returned<limit && visited<16 && bytes<2U*1024U*1024U){
+        source_file *f=&s->files[file_index];
+        if(!entry_scope(f->path,prefix)){if(entry_offset){*error="invalid_entry_cursor";return NULL;}file_index++;continue;}
+        if(visited && f->size>2U*1024U*1024U-bytes)break;
+        visited++;bytes+=f->size;
+        JV *report=object(d);put(d,report,"path",text(d,f->path));put(d,report,"sha256",text(d,f->hash));
+        if(!equal(f->identity.language,"java")){
+            if(entry_offset){*error="invalid_entry_cursor";return NULL;}
+            put(d,report,"status",text(d,"unsupported_entry_language"));push(coverage,report);file_index++;continue;
+        }
+        const char *failure=analyze(s,f);
+        if(!failure && !s->entry_doc){s->entry_builds++;failure=sf_spring_entry_points(&s->cached,ts_tree_root_node(s->cached_tree),&s->entry_doc);}
+        else if(!failure)s->entry_hits++;
+        if(failure){put(d,report,"status",text(d,"analysis_failed"));put(d,report,"error",text(d,failure));push(coverage,report);incomplete=true;file_index++;entry_offset=0;continue;}
+        yyjson_val *catalog=yyjson_doc_get_root(s->entry_doc),*all=get(catalog,"entries"),*cov=get(catalog,"coverage");
+        size_t total=yyjson_arr_size(all);
+        if(entry_offset>total){*error="invalid_entry_cursor";return NULL;}
+        put(d,report,"analysis",check(yyjson_val_mut_copy(d,cov)));
+        bool complete=yyjson_get_bool(get(cov,"syntax_complete"));incomplete|=!complete;
+        put(d,report,"status",text(d,complete?"supported_subset_visited":"incomplete"));push(coverage,report);
+        while(entry_offset<total && returned<limit){
+            yyjson_val *value=yyjson_arr_get(all,entry_offset);bool uncertain=false;
+            if(!entry_matches(value,args,&uncertain)){entry_offset++;continue;}
+            size_t size=0;char *raw=yyjson_val_write(value,0,&size);if(!raw)oom();free(raw);
+            if(returned && (payload>=2U*1024U*1024U || size>2U*1024U*1024U-payload))break;
+            JV *copy=check(yyjson_val_mut_copy(d,value));put(d,copy,"snapshot_id",text(d,s->snapshot_id));
+            put(d,copy,"filter_status",text(d,uncertain?"route_path_not_resolved":"matched"));
+            JV *cq=yyjson_mut_obj_get(copy,"call_query");put(d,cq,"snapshot_id",text(d,s->snapshot_id));
+            push(entries,copy);returned++;payload+=size;entry_offset++;
+        }
+        if(entry_offset<total)break;
+        file_index++;entry_offset=0;
+    }
+    bool more=file_index<s->count;char next[128];snprintf(next,sizeof(next),"%s/%zu/%zu",query_id,file_index,entry_offset);
+    put(d,page,"next_cursor",more?text(d,next):check(yyjson_mut_null(d)));put(d,page,"query_id",text(d,query_id));
+    put(d,page,"returned",number(d,returned));put(d,page,"files_visited",number(d,visited));
+    put(d,page,"enumeration_finished",boolean(d,!more));put(d,page,"coverage_scope",text(d,"this_page_only"));
+    put(d,result,"schema",text(d,SF_ENTRY_SCHEMA));put(d,result,"entries",entries);put(d,result,"coverage",coverage);put(d,result,"page",page);
+    put(d,result,"status",text(d,incomplete?"page_with_gaps":"bounded_page"));
+    put(d,result,"repository_completeness",text(d,"not_asserted"));put(d,result,"authorization",text(d,"not_evaluated"));
+    return result;
+}
+
 static JV *call_tool(server *s, JD *d, yyjson_val *params, int *rpc_error) {
     const char *name=str(params,"name"); const tool *t=NULL;
     for (size_t i=0; i<sizeof(tools)/sizeof(tools[0]); i++) if (equal(name,tools[i].name)) t=&tools[i];
@@ -538,6 +635,7 @@ static JV *call_tool(server *s, JD *d, yyjson_val *params, int *rpc_error) {
     if (!error) {
         if (t->fields==info_fields) data=snapshot_info(s,d);
         else if (t->fields==list_fields) data=file_list(s,d,args,&error);
+        else if (t->fields==entry_fields) data=query_entries(s,d,args,&error);
         else {
             source_file *f=lookup(s,str(args,"path"));
             if (!f) error="path_not_in_snapshot";
@@ -627,5 +725,8 @@ int main(int argc, char **argv) {
         if (!rc && (ferror(stdin) || used)) { fputs("incomplete_mcp_input\n",stderr); rc=2; }
         free(line);
     }
-    sf_document_free(&s->cached); if (s->bundle) yyjson_doc_free(s->bundle); free(s); return rc;
+    sf_document_free(&s->cached); if(s->cached_tree)ts_tree_delete(s->cached_tree);
+    if(s->entry_doc)yyjson_doc_free(s->entry_doc);
+    if (s->bundle) yyjson_doc_free(s->bundle);
+    free(s); return rc;
 }

@@ -1,0 +1,44 @@
+name: Spring entry reference
+on:
+  pull_request:
+    paths:
+      - 'security/**'
+      - 'tests/security/**'
+      - 'tests/spring-reference/**'
+      - 'Makefile.security'
+      - '.github/workflows/security-entry-reference.yml'
+permissions:
+  contents: read
+jobs:
+  registered-mappings:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build CBM Sec
+        run: make -f Makefile.security -j2
+      - name: Build pinned test-only Spring fixture
+        run: |
+          java -version
+          mvn -B -q -f tests/spring-reference/pom.xml compile dependency:build-classpath \
+            -Dmdep.outputFile="$PWD/tests/spring-reference/target/deps.classpath"
+      - name: Compare framework registration with static entry relationships
+        run: |
+          set -euo pipefail
+          java -cp "tests/spring-reference/target/classes:$(cat tests/spring-reference/target/deps.classpath)" \
+            reference.EntryOracle > tests/spring-reference/target/reference.json
+          python3 tests/spring-reference/compare.py build/security/cbm-security-facts \
+            tests/spring-reference/target/reference.json | tee tests/spring-reference/target/comparison.json
+      - name: Save reference evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: spring-entry-reference-${{ github.event.pull_request.head.sha }}
+          path: |
+            tests/spring-reference/target/reference.json
+            tests/spring-reference/target/comparison.json
+            tests/spring-reference/target/deps.classpath
+          if-no-files-found: warn
+          retention-days: 7

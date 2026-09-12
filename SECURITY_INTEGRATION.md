@@ -1,5 +1,7 @@
 # 0.9：导航位置交接与按需上下文
 
+> 0.11 开发版补充：新增第八个只读工具 `query_entry_points`，以及配套工具使用技能和默认关闭的可选提醒钩子。见 [入口关系](SECURITY_ENTRY_POINTS.md) 与 [Agent 配套](SECURITY_AGENT_GUIDANCE.md)。以下旧版范围保留。
+
 这是可执行的查询接口，不是完整的 CBM/Sulliu 自动集成。
 当前共七个只读 MCP 工具；原六个工具保留，新增 `resolve_code_location`。
 没有新增模型、数据库、持久化图导入、全局客户端安装或扫描流程。

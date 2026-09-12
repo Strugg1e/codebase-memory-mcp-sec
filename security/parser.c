@@ -188,7 +188,8 @@ static bool extract_node(TSNode node, void *opaque) {
     return true;
 }
 
-const char *sf_extract(sf_document *d) {
+const char *sf_extract_tree(sf_document *d, TSTree **retained) {
+    if (retained) *retained = NULL;
     if (!d || !d->language || d->facts || d->source_size > SF_MAX_SOURCE) return "invalid_arguments";
     const TSLanguage *lang = grammar(d->language);
     if (!lang) return "unsupported_language";
@@ -209,9 +210,12 @@ const char *sf_extract(sf_document *d) {
     extract_context ctx = {.doc = d, .models = models};
     d->traversal_complete = sf_walk(ts_tree_root_node(tree), extract_node, &ctx, &d->nodes_visited);
     d->framework_analysis_complete &= d->traversal_complete;
-    sf_models_free(models); ts_tree_delete(tree); ts_parser_delete(parser);
+    sf_models_free(models); ts_parser_delete(parser);
+    if (retained && !ctx.error) *retained = tree; else ts_tree_delete(tree);
     return ctx.error;
 }
+
+const char *sf_extract(sf_document *d) { return sf_extract_tree(d, NULL); }
 
 const char *sf_extract_java(sf_document *d) {
     if (!d || !d->language || strcmp(d->language, "java") != 0) return "invalid_arguments";

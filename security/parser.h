@@ -12,6 +12,9 @@ bool sf_walk(TSNode root, bool (*visit)(TSNode, void *), void *context, size_t *
 TSNode sf_call_target(TSNode node);
 TSNode sf_single(TSNode node);
 
+/* Optional tree transfer for same-parse consumers. Caller deletes a returned tree. */
+const char *sf_extract_tree(sf_document *doc, TSTree **retained);
+
 typedef struct sf_models sf_models;
 sf_models *sf_models_new(sf_document *doc, TSNode root);
 void sf_model_add_detail(sf_fact *fact, const char *name, TSNode expression);

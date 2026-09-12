@@ -1,5 +1,7 @@
 # 0.10 开发版：框架声明与语言生态
 
+> 0.11 开发版补充：新增第八个只读工具 `query_entry_points`，以及配套工具使用技能和默认关闭的可选提醒钩子。见 [入口关系](SECURITY_ENTRY_POINTS.md) 与 [Agent 配套](SECURITY_AGENT_GUIDANCE.md)。以下旧版范围保留。
+
 本轮扩展的是已支持语言的框架适配，不是增加完整语言分析器。
 Java、Python、JavaScript、TypeScript、TSX、Go 的语法范围不变；
 局部值流、返回摘要和操作上下文仍限于文档规定的 Java 子集。

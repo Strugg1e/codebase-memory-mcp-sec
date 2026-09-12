@@ -8,6 +8,8 @@ typedef struct {
     const char *input, *phase, *operation, *detail;
 } annotation_rule;
 static const annotation_rule rules[] = {
+    {"org.springframework.stereotype.Controller", "spring-mvc", "controller_declaration", "spring.controller.v1", NULL, NULL, NULL, NULL, NULL},
+    {"org.springframework.web.bind.annotation.RestController", "spring-mvc", "controller_declaration", "spring.controller.v1", NULL, NULL, NULL, NULL, NULL},
     {"org.springframework.web.bind.annotation.GetMapping", "spring-mvc", "route_declaration", "spring.mapping.v1", "GET", NULL, NULL, NULL, "path"},
     {"org.springframework.web.bind.annotation.PostMapping", "spring-mvc", "route_declaration", "spring.mapping.v1", "POST", NULL, NULL, NULL, "path"},
     {"org.springframework.web.bind.annotation.PutMapping", "spring-mvc", "route_declaration", "spring.mapping.v1", "PUT", NULL, NULL, NULL, "path"},

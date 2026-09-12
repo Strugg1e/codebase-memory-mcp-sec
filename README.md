@@ -8,7 +8,7 @@
 
 ## 版本与入口
 
-- 当前功能分支：`feat/security-facts-v0.1`，开发版本 `0.10.0-dev`。
+- 当前功能分支：`feat/security-facts-v0.1`，开发版本 `0.11.0-dev`。
 - 已发布的独立预览版：[0.6.0 Preview 1](https://github.com/Strugg1e/codebase-memory-mcp-sec/releases/tag/cbm-sec-v0.6.0-preview.1)。该包不含后续开发能力。
 - fork 的 `main` 尚未合入安全模块。请以实际分支、提交和可执行文件版本为准。
 - 不使用原版 CBM 的安装脚本安装安全工具；原安装器不会自动安装这些独立可执行文件。
@@ -35,6 +35,8 @@
 | 值关系 | 受限 Java 局部复制、覆盖、表达式、分支及同类辅助方法返回摘要 |
 | 多跳 | 明确选择且逐跳核对的上游调用，最多四跳；不是自动路径发现 |
 | 导航交接 | 按文件哈希和行/字节范围解析候选，保留同一行多次调用与歧义 |
+| Spring MVC 入口 | 类/方法/参数/控制声明关联；固定快照内有界分页，不证明部署或鉴权 |
+| Agent 配套 | 一份工具使用技能，可选会话提醒钩子；不自动安装、不作为安全边界 |
 | 上下文视图 | `full`、`summary`、`values`；精简视图可回取同一完整上下文 |
 
 其他语言的语法支持不等于具有 Java 的值流深度。循环收敛、完整异常、堆/数组内容、跨文件返回摘要、净化证明和业务规则判定仍未实现。
@@ -70,8 +72,12 @@ python3 security/demo_context.py --mcp build/security/cbm-security-mcp
 源代码和其注释始终是不可信数据。只读提示不代替操作系统权限隔离。
 语法事实、可能依赖、运行时条件与最终安全结论分别表达；空结果不等于安全。
 
+入口调查可改用 `query_entry_points` 获取 `call_query`，再选择实际调用点。当前为八个只读 MCP 工具。
+技能从可信工具版本的 `skills/cbm-sec-evidence/` 装载；可选钩子默认关闭，不从被审计仓库自动安装。
+
 ## 文档
 
+- [Spring MVC 入口关系和分页](SECURITY_ENTRY_POINTS.md)、[技能与钩子边界](SECURITY_AGENT_GUIDANCE.md)
 - [产品边界与宿主职责](SECURITY_PRODUCT.md)
 - [导航交接、上下文视图与运行配置](SECURITY_INTEGRATION.md)
 - [固定快照与 MCP 启动](SECURITY_MCP.md)

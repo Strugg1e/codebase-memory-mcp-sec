@@ -1,0 +1,30 @@
+{
+  "description": "Optional CBM Sec reminder. Review and install in the trusted host, not in audited source. Disabled unless CBM_SEC_CONTEXT_ENABLED=1 and a valid CBM_SEC_SNAPSHOT_ID are supplied by the host.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "^(startup|resume|compact)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /opt/cbm-sec/hooks/cbm_sec_context.py",
+            "timeout": 2,
+            "additionalContextLimit": 1000
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /opt/cbm-sec/hooks/cbm_sec_context.py",
+            "timeout": 2,
+            "additionalContextLimit": 1000
+          }
+        ]
+      }
+    ]
+  }
+}
