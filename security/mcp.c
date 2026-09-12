@@ -3,6 +3,7 @@
 #include "capabilities.h"
 #include "agent_views.h"
 #include "entry_points.h"
+#include "entry_security.h"
 #include "operation.h"
 #include "flow.h"
 #include "foundation/sha256.h"
@@ -42,6 +43,7 @@ typedef struct {
     unsigned state;
     size_t parses, hits, failures;
     size_t operation_requests, operation_parses;
+    size_t security_requests, security_parses;
     char snapshot_id[65];
 } server;
 
@@ -177,7 +179,7 @@ static const char *analyze(server *s, source_file *f) {
 }
 
 /* One field table drives BOTH advertised schemas and server-side validation. */
-enum { FIELD_TEXT=0, FIELD_UINT=1, FIELD_CALL_PATH=2 };
+enum { FIELD_TEXT=0, FIELD_UINT=1, FIELD_CALL_PATH=2, FIELD_PATH_LIST=3 };
 typedef struct { const char *name; bool required; unsigned shape; size_t maximum; } field;
 static const field upstream_fields[] = {{"path",true,FIELD_TEXT,1024},
     {"analysis_id",true,FIELD_TEXT,64},{"call_id",true,FIELD_TEXT,64},{NULL,false,FIELD_TEXT,0}};
@@ -199,12 +201,17 @@ static const field location_fields[] = {{"snapshot_id",true,false,64},{"path",tr
 static const field entry_fields[] = {{"snapshot_id",true,false,64},{"framework",false,false,32},
     {"path_prefix",false,false,1024},{"handler",false,false,512},{"route_path",false,false,1024},
     {"entry_id",false,false,64},{"cursor",false,false,160},{"limit",false,true,50},{NULL,false,false,0}};
+static const field security_fields[] = {{"snapshot_id",true,FIELD_TEXT,64},{"path",true,FIELD_TEXT,1024},
+    {"entry_id",true,FIELD_TEXT,64},{"config_paths",true,FIELD_PATH_LIST,SF_SECURITY_FILES},
+    {"request_method",false,FIELD_TEXT,16},{"request_path",false,FIELD_TEXT,511},
+    {"string_matcher_semantics",false,FIELD_TEXT,16},{NULL,false,FIELD_TEXT,0}};
 static const field operation_fields[] = {{"snapshot_id",true,false,64},{"path",true,false,1024},
     {"analysis_id",true,false,64},{"call_id",true,false,64},{"mapper_path",false,false,1024},
     {"mapping_format",false,false,16},{"mapping_path",false,false,1024},{"upstream_calls",false,FIELD_CALL_PATH,SF_FLOW_HOPS},
     {"view",false,false,16},{"argument_index",false,true,63},{"expect_context",false,false,64},{NULL,false,false,0}};
 typedef struct { const char *name, *description; const field *fields; } tool;
 static const tool tools[] = {
+    {"inspect_entry_security", "Inspect Spring Security declarations for an existing Spring entry_id and an explicit config_paths list in the pinned snapshot. Returns chain/rule order, ignoring declarations, source evidence and unknowns. Optional request_method and request_path must be provided together; path means servletPath plus pathInfo, not an external URL. Exact and terminal /** Ant patterns are supported for explicit new AntPathRequestMatcher. String-overload matchers remain unknown unless string_matcher_semantics=ant-path is explicitly supplied as an unverified assumption; default unresolved. No arbitrary matcher execution, URL routing proof, application-wide coverage or security verdict. Selection assumes selected factories are active and no unselected configuration or request rewriting. Missing/unknown earlier matches and order ties are preserved. Config files: max 16, each 256 KiB, total 2 MiB.", security_fields},
     {"query_entry_points", "List Spring MVC declaration-based entry contexts over the pinned file set. Optional path_prefix uses path-component boundaries; handler, route_path and entry_id are exact filters. Unknown path compositions remain candidates under route_path filtering. Follow page.next_cursor even on empty pages; coverage is per page, never whole-repository proof. At most 16 files or 2 MiB are visited per page. Inputs, class/method controls and source references are included; controller registration, external URL, request matching and authorization remain unverified. Reuse call_query for direct handler calls.", entry_fields},
     {"get_snapshot_info", "Describe the pinned explicit file set and real parser cache counters. Not repository coverage or a security verdict.", info_fields},
     {"list_snapshot_files", "List only files in the startup-pinned snapshot, including unsupported files. Use returned next_cursor.", list_fields},
@@ -220,7 +227,11 @@ static const char *validate_fields(const field *fields, yyjson_val *args) {
     for (const field *p = fields; p->name; p++) {
         yyjson_val *v = get(args, p->name);
         if (!v) { if (p->required) return "missing_argument"; else continue; }
-        if (p->shape==FIELD_CALL_PATH) {
+        if (p->shape==FIELD_PATH_LIST) {
+            if (!yyjson_is_arr(v) || !yyjson_arr_size(v) || yyjson_arr_size(v)>p->maximum) return "invalid_security_scope";
+            size_t index,count; yyjson_val *item;
+            yyjson_arr_foreach(v,index,count,item) if(!yyjson_is_str(item) || !logical_path(yyjson_get_str(item))) return "invalid_security_scope";
+        } else if (p->shape==FIELD_CALL_PATH) {
             if (!yyjson_is_arr(v) || !yyjson_arr_size(v) || yyjson_arr_size(v)>p->maximum) return "invalid_flow_path";
             size_t index, count; yyjson_val *entry;
             yyjson_arr_foreach(v,index,count,entry) {
@@ -244,7 +255,10 @@ static JV *fields_schema(JD *d, const field *fields) {
     JV *schema=object(d), *props=object(d), *required=array(d);
     for (const field *p=fields;p->name;p++) {
         JV *v=object(d);
-        if (p->shape==FIELD_CALL_PATH) {
+        if (p->shape==FIELD_PATH_LIST) {
+            put(d,v,"type",text(d,"array"));put(d,v,"minItems",number(d,1));put(d,v,"maxItems",number(d,p->maximum));
+            JV *item=object(d);put(d,item,"type",text(d,"string"));put(d,item,"minLength",number(d,1));put(d,item,"maxLength",number(d,1024));put(d,v,"items",item);
+        } else if (p->shape==FIELD_CALL_PATH) {
             put(d,v,"type",text(d,"array")); put(d,v,"minItems",number(d,1));
             put(d,v,"maxItems",number(d,p->maximum)); put(d,v,"items",fields_schema(d,upstream_fields));
         } else {
@@ -256,6 +270,9 @@ static JV *fields_schema(JD *d, const field *fields) {
         if (equal(p->name,"view")) {
             JV *choices=array(d); push(choices,text(d,"full")); push(choices,text(d,"summary")); push(choices,text(d,"values"));
             put(d,v,"enum",choices);
+        }
+        if (equal(p->name,"string_matcher_semantics")) {
+            JV *choices=array(d);push(choices,text(d,"unresolved"));push(choices,text(d,"ant-path"));put(d,v,"enum",choices);
         }
         put(d,props,p->name,v); if (p->required) push(required,text(d,p->name));
     }
@@ -313,6 +330,8 @@ static JV *snapshot_info(server *s, JD *d) {
     put(d,operations,"parse_attempts",number(d,s->operation_parses));
     put(d,operations,"cached",boolean(d,false));
     put(d,r,"operation_context",operations);
+    JV *security=object(d);put(d,security,"requests",number(d,s->security_requests));put(d,security,"config_parse_attempts",number(d,s->security_parses));
+    put(d,security,"cached",boolean(d,false));put(d,r,"entry_security",security);
     JV *entry=object(d); put(d,entry,"schema",text(d,SF_ENTRY_SCHEMA));
     put(d,entry,"catalog_builds",number(d,s->entry_builds)); put(d,entry,"cache_hits",number(d,s->entry_hits));
     put(d,entry,"capacity_files",number(d,1));put(d,r,"entry_points",entry); return r;
@@ -628,6 +647,34 @@ static JV *query_entries(server *s,JD *d,yyjson_val *args,const char **error) {
     return result;
 }
 
+static int security_source_order(const void *a,const void *b) {
+    return strcmp(((const sf_security_source *)a)->path,((const sf_security_source *)b)->path);
+}
+static JV *inspect_security(server *s,JD *d,source_file *entry_file,yyjson_val *args,const char **error) {
+    const char *id=str(args,"entry_id");if(!sf_digest_valid(id)){*error="invalid_entry_id";return NULL;}
+    if(!equal(entry_file->identity.language,"java")){*error="unsupported_entry_language";return NULL;}
+    sf_security_source sources[SF_SECURITY_FILES];size_t count=0,total=0,i,n;yyjson_val *item;
+    yyjson_arr_foreach(get(args,"config_paths"),i,n,item) {
+        source_file *f=lookup(s,yyjson_get_str(item));if(!f){*error="path_not_in_snapshot";return NULL;}
+        if(!equal(f->identity.language,"java")){*error="unsupported_security_language";return NULL;}
+        if(f->size>SF_SECURITY_FILE_BYTES||f->size>SF_SECURITY_TOTAL_BYTES-total){*error="security_input_limit";return NULL;}
+        for(size_t j=0;j<count;j++)if(equal(sources[j].path,f->path)){*error="duplicate_security_path";return NULL;}
+        sources[count++]=(sf_security_source){f->path,f->source,f->size};total+=f->size;
+    }
+    qsort(sources,count,sizeof(sources[0]),security_source_order);
+    *error=analyze(s,entry_file);if(*error)return NULL;
+    if(!s->entry_doc){s->entry_builds++;*error=sf_spring_entry_points(&s->cached,ts_tree_root_node(s->cached_tree),&s->entry_doc);}
+    else s->entry_hits++;
+    if(*error)return NULL;
+    yyjson_val *entry=NULL,*catalog=yyjson_doc_get_root(s->entry_doc);
+    yyjson_arr_foreach(get(catalog,"entries"),i,n,item)if(equal(id,str(item,"entry_id"))){entry=item;break;}
+    if(!entry){*error="entry_not_found";return NULL;}
+    s->security_requests++;size_t attempts=0;
+    JV *out=NULL;*error=sf_inspect_entry_security(s->snapshot_id,entry,sources,count,str(args,"request_method"),str(args,"request_path"),str(args,"string_matcher_semantics"),&attempts,d,&out);
+    s->security_parses+=attempts;
+    return *error?NULL:out;
+}
+
 static JV *call_tool(server *s, JD *d, yyjson_val *params, int *rpc_error) {
     const char *name=str(params,"name"); const tool *t=NULL;
     for (size_t i=0; i<sizeof(tools)/sizeof(tools[0]); i++) if (equal(name,tools[i].name)) t=&tools[i];
@@ -644,6 +691,7 @@ static JV *call_tool(server *s, JD *d, yyjson_val *params, int *rpc_error) {
             if (!f) error="path_not_in_snapshot";
             else if (t->fields==source_fields) data=source_slice(s,d,f,args,&error);
             else if (t->fields==location_fields) data=resolve_location(s,d,f,args,&error);
+            else if (t->fields==security_fields) data=inspect_security(s,d,f,args,&error);
             else if (t->fields==operation_fields) data=operation_context(s,d,f,args,&error);
             else data=query_facts(s,d,f,args,t->fields==evidence_fields,&error);
         }

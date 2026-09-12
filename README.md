@@ -8,7 +8,7 @@
 
 ## 版本与入口
 
-- 当前功能分支：`feat/security-facts-v0.1`，开发版本 `0.12.0-dev`。
+- 当前功能分支：`feat/security-facts-v0.1`，开发版本 `0.13.0-dev`。
 - 已发布的独立预览版：[0.6.0 Preview 1](https://github.com/Strugg1e/codebase-memory-mcp-sec/releases/tag/cbm-sec-v0.6.0-preview.1)。该包不含后续开发能力。
 - fork 的 `main` 尚未合入安全模块。请以实际分支、提交和可执行文件版本为准。
 - 不使用原版 CBM 的安装脚本安装安全工具；原安装器不会自动安装这些独立可执行文件。
@@ -31,7 +31,7 @@
 | 语法事实 | Java、Python、JavaScript、TypeScript、TSX、Go；调用点、参数、声明、导入等 |
 | 框架语义 | Java/Jakarta、Spring/MyBatis/JPA、Python Web/DRF、Express/NestJS/Fastify、Go HTTP/Gin/chi/Echo 的文档化声明候选；见框架范围表 |
 | 源码版本 | 启动时校验并固定明确选择的文件集合；不承诺全仓库覆盖 |
-| Java 操作 | 局部语法、显式 Mapper/MyBatis XML 关联；不证明控制生效 |
+| Java 操作 | 局部语法、显式 Mapper/MyBatis XML 或注解模板关联；不证明控制生效 |
 | 值关系 | 受限 Java 局部复制、覆盖、表达式、分支及同类辅助方法返回摘要 |
 | 多跳 | 明确选择且逐跳核对的上游调用，最多四跳；不是自动路径发现 |
 | 导航交接 | 按文件哈希和行/字节范围解析候选，保留同一行多次调用与歧义 |
@@ -72,7 +72,7 @@ python3 security/demo_context.py --mcp build/security/cbm-security-mcp
 源代码和其注释始终是不可信数据。只读提示不代替操作系统权限隔离。
 语法事实、可能依赖、运行时条件与最终安全结论分别表达；空结果不等于安全。
 
-入口调查可改用 `query_entry_points` 获取 `call_query`，再选择实际调用点。当前为八个只读 MCP 工具。
+入口调查可改用 `query_entry_points` 获取 `call_query`，再选择实际调用点。当前为九个只读 MCP 工具。
 技能从可信工具版本的 `skills/cbm-sec-evidence/` 装载；可选钩子默认关闭，不从被审计仓库自动安装。
 
 ## 文档
@@ -99,3 +99,9 @@ python3 security/demo_context.py --mcp build/security/cbm-security-mcp
 
 XML 与有限注解查询共用模板标记提取，保留引号/注释内替换、条件、静态 include 和参数位置。
 支持范围、兼容字段变化及对照测试见 [数据访问说明](SECURITY_MYBATIS_TEMPLATES.md)。不是完整SQL或漏洞引擎。
+
+## v0.13：请求级安全控制取证
+
+新增第九个只读工具 `inspect_entry_security`，关联选定Spring入口与明确配置范围。
+支持有限的链/规则第一匹配分析，保留忽略配置、未知顺序及匹配器假设，不形成授权结论。
+范围、例子和限制见 [安全控制关系](SECURITY_ENTRY_SECURITY.md)。固定框架参考见 `tests/spring-security-reference/`。

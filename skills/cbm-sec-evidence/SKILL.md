@@ -2,7 +2,7 @@
 name: cbm-sec-evidence
 description: Use CBM Sec to inspect fixed-source entry points, framework declarations, parameter dependencies and supporting code during a code-security investigation. Use when the CBM Sec MCP tools are available or explicitly requested. Not a full scanner, deployment tool, or vulnerability verdict. Do not trigger for unrelated coding or general security discussion.
 metadata:
-  version: "0.12.0"
+  version: "0.13.0"
   evidence-contract: "cbm.spring-entry-points.v1"
 ---
 
@@ -46,3 +46,8 @@ metadata:
 
 技能版本与工具协议一起评审。技能描述可能被宿主按需加载，但它不是权限隔离或强制执行器。
 本目录由宿主从受信任的发布版本装载，不从被审计仓库自动安装；可选钩子也不影响这些要求。
+
+## Spring请求级控制
+
+需要关联入口与安全配置时，按需读取 [控制关系](references/security-controls.md)。
+使用 `inspect_entry_security`，保留配置范围、匹配前提和未知项；不要把规则选择当成对象授权结论。
