@@ -21,9 +21,9 @@ class SkillTests(unittest.TestCase):
     def enabled(self):return {'CBM_SEC_CONTEXT_ENABLED':'1','CBM_SEC_SNAPSHOT_ID':'a'*64}
     def test_skill_metadata(self):
         s=SKILL.read_text();self.assertTrue(s.startswith('---\nname: cbm-sec-evidence\ndescription:'))
-        self.assertLess(len(s.encode()),10000);self.assertIn('version: "0.11.0"',s)
+        self.assertLess(len(s.encode()),10000);self.assertIn('version: "0.12.0"',s)
     def test_references_are_packaged(self):
-        for name in ['entry-points.md','interpretation.md']:self.assertTrue((SKILL.parent/'references'/name).is_file())
+        for name in ['entry-points.md','interpretation.md','data-access.md']:self.assertTrue((SKILL.parent/'references'/name).is_file())
     def test_skill_tool_names_exist(self):
         s=harness.Session(self);self.addCleanup(s.close)
         tools={t['name'] for t in s.rpc('tools/list',{})['tools']}

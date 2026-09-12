@@ -16,10 +16,11 @@ typedef struct {
     const sf_fact *call;
     const sf_operation_source *mapper, *xml;
     size_t *parse_attempts;
+    bool annotation_sql; /* Explicit alternate to XML; no automatic precedence inference. */
 } sf_operation_request;
 
 /* A bounded source projection, not a call graph or an authorization verdict.
- * Optional mapper and XML inputs must be supplied together. */
+ * XML mode requires mapper+XML. Annotation mode requires mapper only. */
 const char *sf_inspect_operation(const sf_operation_request *request,
                                 yyjson_mut_doc *output, yyjson_mut_val **result);
 #endif

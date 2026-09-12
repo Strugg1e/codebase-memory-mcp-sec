@@ -1,5 +1,7 @@
 # 业务操作上下文 v0.5
 
+> 历史范围说明。0.12 的 XML/注解模式、模板标记修正和静态引用扩展以 [SECURITY_MYBATIS_TEMPLATES.md](SECURITY_MYBATIS_TEMPLATES.md) 为准。
+
 本版给 `cbm-security-mcp` 增加第六个只读工具 `inspect_operation_context`。
 它把一次 Java 方法调用、所在方法的局部材料和明确选择的 MyBatis 映射放到同一份证据包。
 它不自动判断越权，不生成业务规则，也不声称已经建立完整调用图或安全语义图。

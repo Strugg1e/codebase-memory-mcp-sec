@@ -240,11 +240,13 @@ class OperationTests(unittest.TestCase):
         self.assertEqual(data["mybatis"]["sql_operation"], "UPDATE")
         self.assertEqual(data["mybatis"]["declared_xml_tag"]["text_prefix"], "select")
 
-    def test_sql_comments_and_quoted_fake_markers(self):
+    def test_template_markers_inside_sql_comments_and_quotes(self):
         xml = XML.replace("SELECT * FROM orders", "SELECT 'FROM fake #{not_a_binding}' FROM orders /* #{ignored} */")
         data = self.session(xml=xml).inspect()
         self.assertEqual(data["mybatis"]["leading_table_candidate"]["text_prefix"], "orders")
-        self.assertEqual(len(data["mybatis"]["parameter_occurrences"]), 2)
+        self.assertEqual(len(data["mybatis"]["parameter_occurrences"]), 4)
+        self.assertEqual([v.get("parameter_name") for v in data["mybatis"]["parameter_occurrences"]],
+                         ["not_a_binding", "ignored", "id", "tenant"])
 
     def test_cdata_is_not_dropped(self):
         xml = XML.replace("SELECT * FROM orders WHERE id = #{id} AND tenant_id = #{tenant}",
@@ -257,7 +259,10 @@ class OperationTests(unittest.TestCase):
 
     def test_property_placeholder_is_not_whole_parameter(self):
         data = self.session(xml=XML.replace("#{tenant}", "#{tenant.owner}")).inspect()
-        self.assertEqual(data["mybatis"]["parameter_occurrences"][-1]["binding_status"], "unresolved")
+        p = data["mybatis"]["parameter_occurrences"][-1]
+        self.assertEqual(p["binding_status"], "property_path_candidate_value_not_resolved")
+        self.assertNotIn("argument_index", p)
+        self.assertEqual(p["root_argument_index"], 1)
 
     def test_entity_declarations_do_not_read_external_content(self):
         xml = '<!DOCTYPE mapper [<!ENTITY external SYSTEM "file:///etc/passwd">]>' + XML.replace("SELECT *", "&external; SELECT *")

@@ -1,5 +1,6 @@
 #include "operation.h"
 #include "local_flow.h"
+#include "mybatis_template.h"
 #include "parser.h"
 #include "foundation/sha256.h"
 
@@ -45,6 +46,8 @@ static void add(context *c, value *a, value *v) {
     if (!a || !v || !yyjson_mut_arr_append(a, v)) c->error = "out_of_memory";
 }
 static void gap(context *c, const char *code) {
+    value *v;size_t i,n;yyjson_mut_arr_foreach(c->gaps,i,n,v)
+        if(!strcmp(yyjson_mut_get_str(v),code))return;
     if (yyjson_mut_arr_size(c->gaps) < OP_ITEMS) add(c, c->gaps, str(c, code));
     else c->limited = true;
 }
@@ -489,111 +492,243 @@ static size_t tokenize(context *c, const sf_operation_source *s, size_t a, size_
     }
     return used;
 }
-static bool placeholder_name(const token *t, char out[128]) {
-    size_t length = strlen(t->text);
-    if (length < 4 || t->text[length - 1] != '}' ||
-        (t->text[0] != '#' && t->text[0] != '$') || t->text[1] != '{') return false;
-    size_t i = 2, n = 0;
-    while (t->text[i] && t->text[i] != '}' && t->text[i] != ',' && t->text[i] != '.') {
-        if (n + 1 >= 128 || !word_char((unsigned char)t->text[i])) return false;
-        out[n++] = t->text[i++];
+/* Legacy raw XML material remains available; template expansion and marker
+ * extraction are handled once by the common pipeline below. */
+static void sql_context(context *c,const sf_operation_source *s,const nodes *all,TSNode statement,value *mapping) {
+    value *segments=arr(c),*dynamic=arr(c);
+    set(c,mapping,"sql_segments",segments);set(c,mapping,"dynamic_clauses",dynamic);
+    text(c,mapping,"predicate_enforcement","not_proved");
+    for(size_t i=0;i<all->count;i++) {
+        TSNode n=all->items[i];if(!inside(statement,n))continue;
+        if((sf_node_is(n,"element")||sf_node_is(n,"EmptyElemTag"))&&!same(n,statement)) {
+            if(yyjson_mut_arr_size(dynamic)>=OP_ITEMS){c->limited=true;continue;}
+            value *v=obj(c);set(c,v,"element",ref(c,s,n));set(c,v,"test",ref(c,s,attribute(s,n,"test")));
+            text(c,v,"evaluation","not_attempted");add(c,dynamic,v);gap(c,"dynamic_sql_not_expanded");
+        }
+        if(sf_node_is(n,"EntityRef")||sf_node_is(n,"CharRef"))gap(c,"xml_entities_not_decoded");
+        if(sf_node_is(n,"CharData")||sf_node_is(n,"CData")) {
+            if(yyjson_mut_arr_size(segments)>=OP_ITEMS){c->limited=true;continue;}
+            add(c,segments,ref(c,s,n));
+        }
     }
-    out[n] = 0;
-    /* Property access is retained in raw SQL but not equated to the whole DTO. */
-    return simple_name(out) && (t->text[i] == '}' || t->text[i] == ',');
+    gap(c,"sql_dialect_boolean_structure_and_plugins_not_evaluated");
 }
-static void sql_context(context *c, const sf_operation_source *s, const nodes *all, TSNode statement,
-                        value *mapping, parameter_binding *bindings, size_t binding_count) {
-    value *segments = arr(c), *dynamic = arr(c), *occurrences = arr(c), *comparisons = arr(c);
-    set(c, mapping, "sql_segments", segments); set(c, mapping, "dynamic_clauses", dynamic);
-    set(c, mapping, "parameter_occurrences", occurrences); set(c, mapping, "comparison_candidates", comparisons);
-    text(c, mapping, "sql_operation", "unknown"); text(c, mapping, "predicate_enforcement", "not_proved");
-    bool first_sql = true, binding_scope_unknown = false;
-    for (size_t i = 0; i < all->count; i++) {
-        TSNode n = all->items[i];
-        if (inside(statement, n) && (sf_node_is(n, "element") || sf_node_is(n, "EmptyElemTag")) &&
-            (xml_tag(s, n, "bind") || xml_tag(s, n, "include"))) binding_scope_unknown = true;
-    }
-    if (binding_scope_unknown) gap(c, "dynamic_binding_scope_not_resolved");
-    for (size_t i = 0; i < all->count; i++) {
-        TSNode n = all->items[i];
-        if (!inside(statement, n)) continue;
-        if (sf_node_is(n, "element") && !same(n, statement)) {
-            if (yyjson_mut_arr_size(dynamic) >= OP_ITEMS) { c->limited = true; continue; }
-            value *v = obj(c); set(c, v, "element", ref(c, s, n));
-            set(c, v, "test", ref(c, s, attribute(s, n, "test")));
-            text(c, v, "evaluation", "not_attempted"); add(c, dynamic, v);
-            gap(c, "dynamic_sql_not_expanded");
-        }
-        if (sf_node_is(n, "EntityRef") || sf_node_is(n, "CharRef")) gap(c, "xml_entities_not_decoded");
-        if (!sf_node_is(n, "CharData") && !sf_node_is(n, "CData")) continue;
-        if (yyjson_mut_arr_size(segments) >= OP_ITEMS) { c->limited = true; continue; }
-        add(c, segments, ref(c, s, n));
-        token tokens[512]; size_t count = tokenize(c, s, ts_node_start_byte(n), ts_node_end_byte(n), tokens);
-        if (first_sql && count) {
-            first_sql = false;
-            const char *op = tokens[0].text;
-            if (!strcmp(op, "SELECT") || !strcmp(op, "UPDATE") || !strcmp(op, "INSERT") || !strcmp(op, "DELETE")) {
-                text(c, mapping, "sql_operation", op);
-                text(c, mapping, "operation_basis", "leading_sql_token_candidate");
-                size_t table = count;
-                if (!strcmp(op, "UPDATE")) table = 1;
-                else if (!strcmp(op, "DELETE") && count > 1 && !strcmp(tokens[1].text, "FROM")) table = 2;
-                else if (!strcmp(op, "INSERT") && count > 1 && !strcmp(tokens[1].text, "INTO")) table = 2;
-                else if (!strcmp(op, "SELECT")) for (size_t k = 1; k + 1 < count; k++) {
-                    if (!strcmp(tokens[k].text, "(") || !strcmp(tokens[k].text, "SELECT")) break;
-                    if (!strcmp(tokens[k].text, "FROM")) { table = k + 1; break; }
-                }
-                if (table < count && simple_name(tokens[table].text)) {
-                    size_t end = table;
-                    while (end + 2 < count && !strcmp(tokens[end + 1].text, ".") && simple_name(tokens[end + 2].text)) end += 2;
-                    set(c, mapping, "leading_table_candidate", reference(c, s, tokens[table].start, tokens[end].end));
-                }
-            }
-        }
-        bool dynamic_scope = binding_scope_unknown;
-        value *ancestors = arr(c);
-        TSNode parent = xml_parent(ts_node_parent(n)); unsigned depth = 0;
-        while (!ts_node_is_null(parent) && !same(parent, statement) && depth++ < 32) {
-            TSNode test = attribute(s, parent, "test");
-            if (!ts_node_is_null(test)) add(c, ancestors, ref(c, s, test));
-            if (!xml_tag(s, parent, "if") && !xml_tag(s, parent, "where") && !xml_tag(s, parent, "trim")) dynamic_scope = true;
-            parent = xml_parent(ts_node_parent(parent));
-        }
-        if (depth >= 32) { c->limited = true; dynamic_scope = true; }
-        const char *clause = "unknown";
-        for (size_t j = 0; j < count; j++) {
-            token *t = &tokens[j];
-            if (!strcmp(t->text, "WHERE")) clause = "where";
-            else if (!strcmp(t->text, "SET")) clause = "set";
-            if ((t->text[0] != '#' && t->text[0] != '$') || t->text[1] != '{') continue;
-            if (yyjson_mut_arr_size(occurrences) >= OP_ITEMS) { c->limited = true; break; }
-            value *v = obj(c); set(c, v, "source", reference(c, s, t->start, t->end));
-            text(c, v, "form", t->text[0] == '#' ? "parameter_marker" : "text_substitution_marker");
-            /* Each node gets its own copy: yyjson mutable values have one parent. */
-            set(c, v, "xml_conditions", yyjson_mut_val_mut_copy(c->json, ancestors));
-            text(c, v, "binding_status", dynamic_scope ? "dynamic_scope_not_bound" : "unresolved");
-            char name[128];
-            if (!dynamic_scope && placeholder_name(t, name)) for (size_t k = 0; k < binding_count; k++) {
-                if (strcmp(bindings[k].name, name)) continue;
-                text(c, v, "binding_status", "explicit_Param_position_candidate");
-                text(c, v, "parameter_name", name); num(c, v, "argument_index", bindings[k].index);
-            }
-            add(c, occurrences, v);
-            if (j >= 2 && !strcmp(tokens[j - 1].text, "=") && simple_name(tokens[j - 2].text)) {
-                if (yyjson_mut_arr_size(comparisons) >= OP_ITEMS) { c->limited = true; continue; }
-                value *comparison = obj(c);
-                set(c, comparison, "source", reference(c, s, tokens[j - 2].start, t->end));
-                set(c, comparison, "column_token", reference(c, s, tokens[j - 2].start, tokens[j - 2].end));
-                text(c, comparison, "clause_in_text_segment", clause);
-                text(c, comparison, "boolean_structure", "not_evaluated");
-                flag(c, comparison, "guaranteed_scope", false);
-                add(c, comparisons, comparison);
-            }
-        }
-    }
-    gap(c, "sql_dialect_boolean_structure_and_plugins_not_evaluated");
+
+/* Collect template text in source order. Static includes keep their own source
+ * location and each inclusion site. Runtime predicates are never evaluated. */
+typedef struct {
+    context *c; const sf_operation_source *source; const nodes *all;
+    TSNode root, stack[8]; const char *namespace;
+    sf_mb_segment segments[SF_MB_SEGMENTS]; size_t count, visits;
+    bool incomplete, binding_unknown;
+} template_parts;
+static void part_gap(template_parts *p,const char *reason,bool binding_unknown) {
+    gap(p->c,reason);p->incomplete=true;p->binding_unknown|=binding_unknown;
+    if(binding_unknown)gap(p->c,"dynamic_binding_scope_not_resolved");
 }
+static void part_add(template_parts *p,size_t a,size_t b,value *conditions,value *sites,bool unknown) {
+    if(p->count==SF_MB_SEGMENTS){p->c->limited=true;part_gap(p,"template_segment_limit",true);return;}
+    p->segments[p->count++]=(sf_mb_segment){.span={.start=a,.end=b},.conditions=conditions,
+        .include_sites=sites,.binding_scope_unknown=unknown};
+}
+static void xml_parts(template_parts *p,TSNode node,value *conditions,value *sites,
+                      bool unknown,unsigned depth,unsigned include_depth) {
+    context *c=p->c;const sf_operation_source *src=p->source;
+    if(++p->visits>OP_NODES||depth>64){c->limited=true;part_gap(p,"template_traversal_limit",true);return;}
+    if(sf_node_is(node,"CharData")||sf_node_is(node,"CData")) {
+        part_add(p,ts_node_start_byte(node),ts_node_end_byte(node),conditions,sites,unknown);return;
+    }
+    if(sf_node_is(node,"EntityRef")||sf_node_is(node,"CharRef")) {
+        part_gap(p,"xml_template_entities_not_decoded",true);return;
+    }
+    bool element=sf_node_is(node,"element")||sf_node_is(node,"EmptyElemTag");
+    if(element&&xml_tag(src,node,"include")) {
+        char id[512],name[512];TSNode a=attribute(src,node,"refid");size_t hits=0;TSNode target={0};
+        bool property=false;
+        for(size_t i=0;i<p->all->count;i++)if(inside(node,p->all->items[i])&&xml_tag(src,p->all->items[i],"property"))property=true;
+        if(property||!literal(src,a,id,sizeof(id))||strchr(id,'$')) {
+            part_gap(p,"include_properties_or_expression_not_supported",true);return;
+        }
+        const char *local=id;const char *dot=strrchr(id,'.');
+        if(dot){size_t n=(size_t)(dot-id);if(strlen(p->namespace)!=n||memcmp(id,p->namespace,n)){
+            part_gap(p,"external_include_not_selected",true);return;}local=dot+1;}
+        for(size_t i=0;i<p->all->count;i++) {
+            TSNode n=p->all->items[i];
+            if(!sf_node_is(n,"element")||!same(xml_parent(ts_node_parent(n)),p->root)||!xml_tag(src,n,"sql"))continue;
+            if(literal(src,attribute(src,n,"id"),name,sizeof(name))&&!strcmp(name,local)){hits++;target=n;}
+        }
+        if(hits!=1||!ts_node_is_null(attribute(src,target,"databaseId"))){
+            part_gap(p,"include_missing_ambiguous_or_database_variant",true);return;}
+        if(include_depth>=8){c->limited=true;part_gap(p,"include_depth_limit",true);return;}
+        for(unsigned i=0;i<include_depth;i++)if(same(target,p->stack[i])){
+            part_gap(p,"include_cycle",true);return;}
+        value *next=yyjson_mut_val_mut_copy(c->json,sites);add(c,next,ref(c,src,node));
+        p->stack[include_depth]=target;
+        xml_parts(p,target,conditions,next,unknown,depth+1,include_depth+1);return;
+    }
+    if(element) {
+        if(xml_tag(src,node,"bind")){part_gap(p,"dynamic_binding_scope_not_resolved",true);return;}
+        if(xml_tag(src,node,"if")||xml_tag(src,node,"when")||xml_tag(src,node,"otherwise")) {
+            value *next=yyjson_mut_val_mut_copy(c->json,conditions),*v;
+            TSNode test=attribute(src,node,"test");
+            if(ts_node_is_null(test)&&!xml_tag(src,node,"otherwise"))part_gap(p,"dynamic_test_attribute_missing",true);
+            v=ts_node_is_null(test)?ref(c,src,node):ref(c,src,test);
+            char tag[64]={0};node_text(src,xml_name(node),tag,sizeof(tag));
+            text(c,v,"xml_element",tag);text(c,v,"evaluation","not_performed");
+            TSNode parent=xml_parent(ts_node_parent(node));
+            if(xml_tag(src,parent,"choose"))set(c,v,"choice_group",ref(c,src,parent));
+            if(xml_tag(src,node,"otherwise"))text(c,v,"branch_semantics","no_preceding_when_matched");
+            else if(xml_tag(src,node,"when"))text(c,v,"branch_semantics","first_matching_when");
+            add(c,next,v);conditions=next;
+        }else if(xml_tag(src,node,"foreach")) {
+            unknown=true;part_gap(p,"foreach_scope_not_resolved",false);
+        }else if(!xml_tag(src,node,"sql")&&!xml_tag(src,node,"select")&&!xml_tag(src,node,"insert")&&
+            !xml_tag(src,node,"update")&&!xml_tag(src,node,"delete")&&!xml_tag(src,node,"choose")&&
+            !xml_tag(src,node,"where")&&!xml_tag(src,node,"trim")&&!xml_tag(src,node,"set")) {
+            unknown=true;part_gap(p,"xml_template_element_not_supported",true);
+        }
+    }
+    TSTreeCursor cursor=ts_tree_cursor_new(node);
+    if(ts_tree_cursor_goto_first_child(&cursor))do {
+        TSNode child=ts_tree_cursor_current_node(&cursor);
+        if(!ts_node_is_named(child)||sf_node_is(child,"STag")||sf_node_is(child,"ETag")||
+            sf_node_is(child,"Comment")||sf_node_is(child,"PI"))continue;
+        xml_parts(p,child,conditions,sites,unknown,depth+1,include_depth);
+    }while(ts_tree_cursor_goto_next_sibling(&cursor));
+    ts_tree_cursor_delete(&cursor);
+}
+
+/* Resource observations share the same ordered template pieces for both input
+ * forms. SQL scope and boolean implication are deliberately not inferred. */
+static void resource_material(template_parts *p,value *mapping,value *analysis) {
+    context *c=p->c;const sf_operation_source *s=p->source;bool first_sql=true;
+    value *comparisons=arr(c),*occ=yyjson_mut_obj_get(analysis,"parameter_occurrences");
+    set(c,mapping,"comparison_candidates",comparisons);
+    text(c,mapping,"sql_structure_scope","per_template_text_segment_not_full_sql_ast");
+    text(c,mapping,"sql_operation","unknown");
+    yyjson_mut_obj_remove_str(mapping,"leading_table_candidate");
+    if(p->incomplete){gap(c,"incomplete_template_resource_structure_not_classified");return;}
+    for(size_t part=0;part<p->count;part++) {
+        token tokens[512];size_t count=tokenize(c,s,p->segments[part].span.start,p->segments[part].span.end,tokens);
+        if(first_sql&&count){
+            first_sql=false;const char *op=tokens[0].text;size_t table=count;
+            if(!strcmp(op,"SELECT")||!strcmp(op,"INSERT")||!strcmp(op,"UPDATE")||!strcmp(op,"DELETE")){
+                text(c,mapping,"sql_operation",op);text(c,mapping,"operation_basis","leading_sql_token_candidate");
+                if(!strcmp(op,"UPDATE"))table=1;
+                else if(!strcmp(op,"INSERT")&&count>1&&!strcmp(tokens[1].text,"INTO"))table=2;
+                else if(!strcmp(op,"DELETE")&&count>1&&!strcmp(tokens[1].text,"FROM"))table=2;
+                else if(!strcmp(op,"SELECT"))for(size_t k=1;k+1<count;k++){
+                    if(!strcmp(tokens[k].text,"(")||!strcmp(tokens[k].text,"SELECT"))break;
+                    if(!strcmp(tokens[k].text,"FROM")){table=k+1;break;}
+                }
+                if(table<count&&simple_name(tokens[table].text)){
+                    size_t end=table;
+                    while(end+2<count&&!strcmp(tokens[end+1].text,".")&&simple_name(tokens[end+2].text))end+=2;
+                    set(c,mapping,"leading_table_candidate",reference(c,s,tokens[table].start,tokens[end].end));
+                }
+            }
+        }
+        const char *clause="unknown";
+        for(size_t j=0;j<count;j++){
+            if(!strcmp(tokens[j].text,"WHERE"))clause="where";
+            else if(!strcmp(tokens[j].text,"SET"))clause="set";
+            if(j<2||strcmp(tokens[j-1].text,"=")||!simple_name(tokens[j-2].text))continue;
+            value *o;size_t k,n;yyjson_mut_arr_foreach(occ,k,n,o){
+                value *at=yyjson_mut_obj_get(o,"source");
+                if(yyjson_mut_get_uint(yyjson_mut_obj_get(o,"segment_index"))!=part||
+                    yyjson_mut_get_uint(yyjson_mut_obj_get(at,"start_byte"))!=tokens[j].start||
+                    yyjson_mut_get_uint(yyjson_mut_obj_get(at,"end_byte"))!=tokens[j].end)continue;
+                if(yyjson_mut_arr_size(comparisons)==OP_ITEMS){c->limited=true;return;}
+                value *v=obj(c);set(c,v,"source",reference(c,s,tokens[j-2].start,tokens[j].end));
+                set(c,v,"column_token",reference(c,s,tokens[j-2].start,tokens[j-2].end));
+                text(c,v,"clause_in_text_segment",clause);text(c,v,"boolean_structure","not_evaluated");
+                text(c,v,"role_candidate",!strcmp(clause,"set")?"write_assignment":"comparison");
+                num(c,v,"template_occurrence_index",k);flag(c,v,"guaranteed_scope",false);add(c,comparisons,v);
+            }
+        }
+    }
+}
+static void finish_template(template_parts *p,value *mapping,parameter_binding *bindings,size_t count) {
+    context *c=p->c;sf_mb_binding b[OP_PARAMS]={0};
+    for(size_t i=0;i<count;i++)b[i]=(sf_mb_binding){bindings[i].name,bindings[i].index};
+    for(size_t i=0;i<p->count;i++)p->segments[i].binding_scope_unknown|=p->binding_unknown;
+    value *analysis=NULL;
+    const char *err=sf_mybatis_template(c->json,p->source,p->segments,p->count,b,count,p->incomplete,&analysis);
+    if(err){c->error=err;return;}
+    set(c,mapping,"template_analysis",analysis);
+    set(c,mapping,"parameter_occurrences",yyjson_mut_val_mut_copy(c->json,yyjson_mut_obj_get(analysis,"parameter_occurrences")));
+    text(c,mapping,"parameter_occurrence_basis","template_before_sql_lexing");
+    resource_material(p,mapping,analysis);
+    c->limited|=yyjson_mut_get_bool(yyjson_mut_obj_get(analysis,"truncated"));
+    if(p->incomplete)gap(c,"template_material_incomplete");
+    value *g;size_t i,n;yyjson_mut_arr_foreach(yyjson_mut_obj_get(analysis,"gaps"),i,n,g)gap(c,yyjson_mut_get_str(g));
+}
+static void xml_template(context *c,const sf_operation_source *s,const nodes *all,TSNode root,
+    TSNode statement,const char *namespace,value *mapping,parameter_binding *bindings,size_t count) {
+    template_parts p={.c=c,.source=s,.all=all,.root=root,.namespace=namespace};
+    xml_parts(&p,statement,arr(c),arr(c),false,0,0);
+    finish_template(&p,mapping,bindings,count);
+}
+static bool plain_annotation_part(template_parts *p,TSNode n) {
+    context *c=p->c;size_t a=ts_node_start_byte(n),b=ts_node_end_byte(n);
+    if(!sf_node_is(n,"string_literal")||b<a+2||p->source->source[a]!='"'||p->source->source[b-1]!='"'){
+        part_gap(p,"annotation_sql_requires_plain_string_literals",true);return false;}
+    a++;b--;
+    for(size_t i=a;i<b;i++)if(p->source->source[i]=='\\'||p->source->source[i]=='\n'||p->source->source[i]=='\r'){
+        part_gap(p,"annotation_string_escape_or_text_block_not_decoded",true);return false;}
+    /* Embedded XML needs its own syntax mapping; do not pretend it is plain SQL. */
+    for(size_t i=a;i+7<=b;i++)if(!memcmp(p->source->source+i,"<script",7)){
+        part_gap(p,"annotation_script_not_expanded",true);return false;}
+    part_add(p,a,b,arr(c),arr(c),false);return true;
+}
+static void annotation_template(context *c,const sf_operation_source *s,const nodes *all,TSNode method,
+    value *mapping,parameter_binding *bindings,size_t bound) {
+    TSNode chosen={0};size_t hits=0;const char *op=NULL;bool custom=false;
+    const char *names[]={"Select","Insert","Update","Delete"};const char *ops[]={"SELECT","INSERT","UPDATE","DELETE"};
+    TSNode modifiers=child_kind(method,"modifiers");
+    for(size_t i=0;i<all->count;i++) {
+        TSNode n=all->items[i];char name[384],expected[128];
+        if(!same(ts_node_parent(n),modifiers)||(!sf_node_is(n,"annotation")&&!sf_node_is(n,"marker_annotation"))||
+            !node_text(s,sf_field(n,"name"),name,sizeof(name)))continue;
+        if(qualified_type(s,all,name,"org.apache.ibatis.annotations.Lang"))custom=true;
+        for(size_t k=0;k<4;k++) {
+            snprintf(expected,sizeof(expected),"org.apache.ibatis.annotations.%s",names[k]);
+            if(qualified_type(s,all,name,expected)){chosen=n;hits++;op=ops[k];}
+            snprintf(expected,sizeof(expected),"org.apache.ibatis.annotations.%sProvider",names[k]);
+            if(qualified_type(s,all,name,expected)){custom=true;gap(c,"annotation_provider_not_executed");}
+        }
+    }
+    if(custom||hits!=1){text(c,mapping,"status","unresolved");text(c,mapping,"reason","annotation_missing_ambiguous_or_custom_language");gap(c,"annotation_missing_ambiguous_or_custom_language");return;}
+    set(c,mapping,"statement",ref(c,s,chosen));text(c,mapping,"declared_operation",op);
+    text(c,mapping,"source_kind","annotation");text(c,mapping,"text_assembly","literal_array_space_join_not_materialized");text(c,mapping,"status","explicit_annotation_candidate");
+    text(c,mapping,"predicate_enforcement","not_proved");text(c,mapping,"sql_operation","unknown");
+    value *raw=arr(c);set(c,mapping,"sql_segments",raw);set(c,mapping,"dynamic_clauses",arr(c));set(c,mapping,"comparison_candidates",arr(c));
+    template_parts p={.c=c,.source=s,.all=all};TSNode args=sf_field(chosen,"arguments"),expression={0};size_t values=0;
+    for(uint32_t i=0;i<ts_node_named_child_count(args);i++) {
+        TSNode n=ts_node_named_child(args,i);
+        if(sf_node_is(n,"comment")||sf_node_is(n,"line_comment")||sf_node_is(n,"block_comment"))continue;
+        if(sf_node_is(n,"element_value_pair")) {
+            if(!spells(s,sf_field(n,"key"),"value")){part_gap(&p,"annotation_attributes_not_resolved",true);continue;}
+            n=sf_field(n,"value");
+        }
+        values++;expression=n;
+    }
+    set(c,mapping,"query_expression",ref(c,s,args));
+    if(values!=1){part_gap(&p,"annotation_sql_value_ambiguous",true);}
+    else if(sf_node_is(expression,"element_value_array_initializer")) {
+        for(uint32_t i=0;i<ts_node_named_child_count(expression);i++) {
+            TSNode n=ts_node_named_child(expression,i);
+            if(sf_node_is(n,"comment")||sf_node_is(n,"line_comment")||sf_node_is(n,"block_comment"))continue;
+            plain_annotation_part(&p,n);
+        }
+    }else plain_annotation_part(&p,expression);
+    for(size_t i=0;i<p.count;i++)add(c,raw,reference(c,s,p.segments[i].span.start,p.segments[i].span.end));
+    if(!p.count)part_gap(&p,"annotation_sql_has_no_supported_text",true);
+    finish_template(&p,mapping,bindings,bound);
+    gap(c,"annotation_other_xml_mappings_options_and_registration_not_verified");
+    gap(c,"sql_dialect_boolean_structure_and_plugins_not_evaluated");
+}
+
 static void mapping_status(context *c, value *mapping, const char *reason) {
     text(c, mapping, "status", "unresolved"); text(c, mapping, "reason", reason); gap(c, reason);
 }
@@ -602,7 +737,7 @@ static void mybatis_context(context *c, const sf_operation_source *caller, const
     value *mapping = obj(c); set(c, result, "mybatis", mapping);
     text(c, mapping, "status", "not_requested");
     text(c, mapping, "runtime_binding", "not_verified");
-    text(c, mapping, "scope", "explicit_mapper_and_xml_inputs_only");
+    text(c, mapping, "scope", c->request->annotation_sql ? "explicit_mapper_annotation_input_only" : "explicit_mapper_and_xml_inputs_only");
     if (!c->request->mapper) return;
     const sf_operation_source *mapper = c->request->mapper, *xml = c->request->xml;
     nodes *mn = calloc(1, sizeof(*mn)), *xn = calloc(1, sizeof(*xn));
@@ -640,6 +775,9 @@ static void mybatis_context(context *c, const sf_operation_source *caller, const
     if (!positional) { mapping_status(c, mapping, "mapper_arguments_not_positionally_aligned"); goto done; }
     parameter_binding bindings[OP_PARAMS] = {0};
     size_t bound = param_bindings(c, mapper, mn, mapper_method, mapping, bindings);
+    if(c->request->annotation_sql){
+        annotation_template(c,mapper,mn,mapper_method,mapping,bindings,bound);goto done;
+    }
     xt = parse(c, xml, tree_sitter_xml(), xn, &error);
     if (!xt) { gap(c, "xml_mapping_not_parsed"); mapping_status(c, mapping, error); goto done; }
     TSNode root = {0}, statement = {0}; size_t roots = 0, matches = 0;
@@ -668,7 +806,10 @@ static void mybatis_context(context *c, const sf_operation_source *caller, const
     text(c, mapping, "status", "explicit_mapping_candidate");
     set(c, mapping, "statement", ref(c, xml, statement));
     set(c, mapping, "declared_xml_tag", ref(c, xml, xml_name(statement)));
-    sql_context(c, xml, xn, statement, mapping, bindings, bound);
+    text(c,mapping,"source_kind","xml");
+    text(c,mapping,"text_assembly","ordered_source_segments_with_static_includes_not_rendered");
+    sql_context(c, xml, xn, statement, mapping);
+    xml_template(c,xml,xn,root,statement,namespace,mapping,bindings,bound);
     gap(c, "mapper_registration_inheritance_and_other_files_not_verified");
 done:
     if (xt) ts_tree_delete(xt);
@@ -680,7 +821,8 @@ const char *sf_inspect_operation(const sf_operation_request *request, yyjson_mut
     *result = NULL;
     if (!request || !output || !request->caller || !request->call || !request->snapshot_id ||
         !request->caller->language || strcmp(request->caller->language, "java") ||
-        strcmp(request->call->kind, "call_site") || (!!request->mapper != !!request->xml)) return "unsupported_operation_anchor";
+        strcmp(request->call->kind, "call_site") ||
+        (request->annotation_sql ? (!request->mapper || request->xml) : (!!request->mapper != !!request->xml))) return "unsupported_operation_anchor";
     context c = {.json = output, .request = request}; c.gaps = arr(&c);
     sf_operation_source source = {request->caller->path, request->caller->source, request->caller->source_hash, request->caller->source_size};
     nodes *all = calloc(1, sizeof(*all));

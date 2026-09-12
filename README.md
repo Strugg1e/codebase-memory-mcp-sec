@@ -8,7 +8,7 @@
 
 ## 版本与入口
 
-- 当前功能分支：`feat/security-facts-v0.1`，开发版本 `0.11.0-dev`。
+- 当前功能分支：`feat/security-facts-v0.1`，开发版本 `0.12.0-dev`。
 - 已发布的独立预览版：[0.6.0 Preview 1](https://github.com/Strugg1e/codebase-memory-mcp-sec/releases/tag/cbm-sec-v0.6.0-preview.1)。该包不含后续开发能力。
 - fork 的 `main` 尚未合入安全模块。请以实际分支、提交和可执行文件版本为准。
 - 不使用原版 CBM 的安装脚本安装安全工具；原安装器不会自动安装这些独立可执行文件。
@@ -94,3 +94,8 @@ python3 security/demo_context.py --mcp build/security/cbm-security-mcp
 上游原 README 字节保存在 [UPSTREAM_README.md](UPSTREAM_README.md)，仅作上游参考，不代表 CBM Sec 的能力或发布验证。
 安全模块当前复用基线为 `1db8bace03140f5793ff9205e5281732e77c2bea`，不自动声称与最新上游同步。
 保留 [MIT 许可证](LICENSE) 及 [第三方声明](THIRD_PARTY.md)。现阶段不拆仓库，不重写上游解析器；后续通过明确的源码和导航接口复用能力。
+
+## 0.12：MyBatis 模板取证
+
+XML 与有限注解查询共用模板标记提取，保留引号/注释内替换、条件、静态 include 和参数位置。
+支持范围、兼容字段变化及对照测试见 [数据访问说明](SECURITY_MYBATIS_TEMPLATES.md)。不是完整SQL或漏洞引擎。

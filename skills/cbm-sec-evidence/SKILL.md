@@ -2,7 +2,7 @@
 name: cbm-sec-evidence
 description: Use CBM Sec to inspect fixed-source entry points, framework declarations, parameter dependencies and supporting code during a code-security investigation. Use when the CBM Sec MCP tools are available or explicitly requested. Not a full scanner, deployment tool, or vulnerability verdict. Do not trigger for unrelated coding or general security discussion.
 metadata:
-  version: "0.11.0"
+  version: "0.12.0"
   evidence-contract: "cbm.spring-entry-points.v1"
 ---
 
@@ -22,6 +22,7 @@ metadata:
 - 查某个入口：阅读 handler、declared_paths、conditions、inputs、control_declarations 和 gaps。路径候选不是外部 URL，控制声明不是已生效防护。详细规则按需读 [入口说明](references/entry-points.md)。
 - 追处理函数内的操作：用返回的 `call_query` 查询 `query_security_facts`。选择具体调用现场，再调用 `inspect_operation_context`；不要把 handler 的声明编号当作 call_id。
 - 查参数关系：先用 `view=summary`；需要核对某个根层实参时用 `view=values` 和 argument_index。需要完整材料时使用返回的 full_request，不手工拼旧编号。
+- 查 MyBatis 操作：按输入选择 XML 或显式 annotation 模式，区分模板参数、文本替换、条件和对象属性。按需读 [数据访问说明](references/data-access.md)。
 - 从导航位置开始：使用 `resolve_code_location`，保留同一行的多个候选。只有宿主核对索引与固定源码后，才将导航位置作为当前调查依据。
 
 只展开当前问题所需的证据。不要每轮加载整仓、全部技能参考或全部历史输出。
