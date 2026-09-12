@@ -53,13 +53,15 @@ static bool path(const char *raw,size_t a,size_t b,char root[128],char prop[256]
 }
 const char *sf_mybatis_template(yyjson_mut_doc *d,const sf_operation_source *src,
     const sf_mb_segment *segments,size_t count,const sf_mb_binding *bindings,
-    size_t binding_count,bool incomplete,V **result) {
+    size_t binding_count,bool xml_property_phase,bool incomplete,V **result) {
     if(!d||!src||!result||count>SF_MB_SEGMENTS||binding_count>64)return "invalid_template_input";
     scan s={.d=d};s.gaps=arr(&s);V *out=obj(&s),*occ=arr(&s),*parts=arr(&s),*escaped=arr(&s);
     text(&s,out,"schema","cbm.mybatis-template.v1");text(&s,out,"stage","template_before_sql_lexing");
     text(&s,out,"evaluation","source_candidates_no_ognl_or_database_execution");
     put(&s,out,"gaps",s.gaps);put(&s,out,"segments",parts);put(&s,out,"parameter_occurrences",occ);
     put(&s,out,"escaped_markers",escaped);
+    text(&s,out,"input_kind",xml_property_phase?"xml_template":"plain_annotation_literals");
+    text(&s,out,"configuration_properties",xml_property_phase?"not_supplied":"not_applied_to_plain_annotation");
     if(incomplete)gap(&s,"template_material_incomplete");
     for(size_t part=0;part<count;part++) {
         const sf_mb_segment *p=&segments[part];size_t a=p->span.start,b=p->span.end;
@@ -71,12 +73,21 @@ const char *sf_mybatis_template(yyjson_mut_doc *d,const sf_operation_source *src
             char kind=src->source[i];
             if((kind!='#'&&kind!='$')||i+1==b||src->source[i+1]!='{'){i++;continue;}
             size_t start=i;i+=2;
-            /* GenericTokenParser treats an immediately preceding slash as an
-             * escaped opener, irrespective of SQL quotes or slash parity. */
-            if(start>a&&src->source[start-1]=='\\') {
-                if(yyjson_mut_arr_size(escaped)<SF_MB_MARKERS)add(&s,escaped,ref(&s,src,start-1,i));
+            /* XML XNode applies PropertyParser before TextSqlNode. A single
+             * slash before ${ is removed there and is NOT a runtime barrier.
+             * Keep original bytes; never synthesize source offsets. Additional
+             * passes (include/configuration) and multiple slashes stay unknown. */
+            size_t slashes=0;
+            while(start>a+slashes&&src->source[start-slashes-1]=='\\')slashes++;
+            bool escape_unknown=slashes>1&&xml_property_phase&&kind=='$';
+            if(slashes) {
+                V *e=ref(&s,src,start-slashes,i);
+                text(&s,e,"effect",xml_property_phase&&kind=='$'?
+                    (escape_unknown?"xml_escape_stages_not_resolved":"xml_property_unescape_before_runtime"):
+                    "escaped_at_marker_stage");
+                if(yyjson_mut_arr_size(escaped)<SF_MB_MARKERS)add(&s,escaped,e);
                 else s.limited=true;
-                continue;
+                if(!xml_property_phase||kind!='$')continue;
             }
             bool escaped_close=false,nested=false;
             while(i<b) {
@@ -93,10 +104,18 @@ const char *sf_mybatis_template(yyjson_mut_doc *d,const sf_operation_source *src
             V *v=obj(&s);put(&s,v,"source",ref(&s,src,start,i));put(&s,v,"expression",ref(&s,src,start+2,close));
             number(&s,v,"segment_index",part);
             text(&s,v,"form",kind=='#'?"parameter_marker":"text_substitution_marker");
-            text(&s,v,"processing",kind=='#'?"parameter_mapping_candidate":"text_substitution");
+            text(&s,v,"processing",kind=='#'?"parameter_mapping_candidate":
+                escape_unknown?"xml_escape_stages_not_resolved":
+                slashes?"xml_property_unescape_then_substitution_candidate":"text_substitution");
+            if(xml_property_phase&&kind=='$') {
+                text(&s,v,"parameter_binding_assumption","marker_survives_configuration_property_phase");
+                gap(&s,"xml_configuration_properties_not_supplied");
+                if(slashes)put(&s,v,"escape_source",ref(&s,src,start-slashes,start+2));
+                if(escape_unknown)gap(&s,"xml_escape_stages_not_resolved");
+            }
             put(&s,v,"xml_conditions",copy(&s,p->conditions));put(&s,v,"include_sites",copy(&s,p->include_sites));
             text(&s,v,"condition_evaluation","not_performed");flag(&s,v,"guaranteed_scope",false);
-            text(&s,v,"binding_status",p->binding_scope_unknown?"dynamic_scope_not_bound":"unresolved");
+            text(&s,v,"binding_status",escape_unknown?"preprocessing_not_resolved":p->binding_scope_unknown?"dynamic_scope_not_bound":"unresolved");
             size_t end=close;
             if(kind=='#')for(size_t j=start+2;j<close;j++)if(src->source[j]==','){end=j;break;}
             char root[128]={0},prop[256]={0};
@@ -105,7 +124,7 @@ const char *sf_mybatis_template(yyjson_mut_doc *d,const sf_operation_source *src
                 text(&s,v,"parameter_name",root);text(&s,v,"property_path",prop);
                 bool reserved=!strcmp(root,"_parameter")||!strcmp(root,"_databaseId");
                 if(reserved)gap(&s,"reserved_binding_context_not_resolved");
-                for(size_t k=0;!reserved&&!p->binding_scope_unknown&&k<binding_count;k++)if(!strcmp(root,bindings[k].name)) {
+                for(size_t k=0;!reserved&&!escape_unknown&&!p->binding_scope_unknown&&k<binding_count;k++)if(!strcmp(root,bindings[k].name)) {
                     if(*prop) {
                         number(&s,v,"root_argument_index",bindings[k].argument_index);
                         text(&s,v,"binding_status","property_path_candidate_value_not_resolved");

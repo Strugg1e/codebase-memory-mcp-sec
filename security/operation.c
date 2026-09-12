@@ -653,7 +653,7 @@ static void finish_template(template_parts *p,value *mapping,parameter_binding *
     for(size_t i=0;i<count;i++)b[i]=(sf_mb_binding){bindings[i].name,bindings[i].index};
     for(size_t i=0;i<p->count;i++)p->segments[i].binding_scope_unknown|=p->binding_unknown;
     value *analysis=NULL;
-    const char *err=sf_mybatis_template(c->json,p->source,p->segments,p->count,b,count,p->incomplete,&analysis);
+    const char *err=sf_mybatis_template(c->json,p->source,p->segments,p->count,b,count,!c->request->annotation_sql,p->incomplete,&analysis);
     if(err){c->error=err;return;}
     set(c,mapping,"template_analysis",analysis);
     set(c,mapping,"parameter_occurrences",yyjson_mut_val_mut_copy(c->json,yyjson_mut_obj_get(analysis,"parameter_occurrences")));

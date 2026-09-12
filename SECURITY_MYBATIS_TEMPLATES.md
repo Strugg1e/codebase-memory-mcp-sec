@@ -39,9 +39,16 @@ XML 注释不是 SQL 文本，不纳入此列表。
 
 - #{name}：parameter_marker，参数映射候选。
 - ${name}：text_substitution_marker，文本替换。
-- 直接反斜杠转义的起始标记：记录 escaped_markers，不按正常标记绑定。
+- 转义起始标记：记录 escaped_markers 及 effect，不能将它理解为“不会替换”。
+- XML 的单个 `\${name}`：前置 PropertyParser 可先移除反斜杠，后续仍发生文本替换；保留此候选。
+- XML 多重反斜杠：保留标记与 preprocessing_not_resolved，不建立确定的参数关联。
+- `\#{name}` 在当前标记阶段仍按转义处理；不把 XML 美元标记的处理套给井号标记。
 - 未闭合、跨片段、嵌套或转义结束符：保留缺口；不执行表达式或后续模板阶段。
 - 文本替换可能改变 SQL 及后续参数标记，工具不假装枚举了替换结果。
+
+XML 属性阶段可能先用运行配置替换 `${...}`。配置未提供时，参数关联附带
+`parameter_binding_assumption=marker_survives_configuration_property_phase`，不能将该关联当作
+已证明的运行时来源。转义处理始终保留原始字节，不伪造已归一化文本的位置。
 
 `mybatis.template_analysis` 的结构版本是 cbm.mybatis-template.v1，包含有序 segments、
 parameter_occurrences、escaped_markers、gaps、input_incomplete 和 truncated。
@@ -109,3 +116,10 @@ BoundSql，比较参数顺序和已标记文本替换次数；不创建数据库
 https://mybatis.org/mybatis-3/sqlmap-xml.html
 https://mybatis.org/mybatis-3/dynamic-sql.html
 https://mybatis.org/mybatis-3/java-api.html
+
+首轮独立参考发现：XML 单反斜杠的美元标记仍可能被替换，原实现将其排除错误。保留原失败
+样例，并增加 CDATA、静态 include 和井号转义对照；不通过删除样例或放宽比较使其通过。
+
+前置属性处理依据：
+https://mybatis.org/mybatis-3/xref/org/apache/ibatis/parsing/XNode.html
+https://mybatis.org/mybatis-3/xref/org/apache/ibatis/parsing/PropertyParser.html

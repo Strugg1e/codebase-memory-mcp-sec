@@ -8,6 +8,8 @@
 
 读取 mybatis.parameter_occurrences。#{...} 是参数映射候选，${...} 是文本替换；引号或 SQL 注释
 不能用来排除模板标记。出现文本替换不等于漏洞成立，出现参数绑定也不等于整个操作安全。
+XML 的 `\${...}` 可能先被属性阶段去掉反斜杠，再被运行阶段替换；escaped_markers不是安全列表。
+读取 effect、processing 和参数关联的前提。XML配置属性未提供、多重转义等必须保留未知。
 
 argument_index 是根层操作的参数编号，用 arguments 中 index 相等的对象读取 local_value_flow，
 不能把它当作精简视图数组中的下标。多跳结果按 argument_flow.local_value_paths 的 argument_index 关联。

@@ -37,7 +37,7 @@ public final class TemplateOracle {
         }
         Configuration annotations = new Configuration(); annotations.addMapper(data.AnnotationMapper.class);
         List<String> cases = new ArrayList<>();
-        for (String method : List.of("plain", "quoted", "comments", "included", "conditional", "choice", "cdata", "escaped")) {
+        for (String method : List.of("plain", "quoted", "comments", "included", "conditional", "choice", "cdata", "escaped", "escaped_cdata", "escaped_include", "escaped_hash")) {
             cases.add(result(xml, "xml", "data.XmlMapper", method, true));
             if (method.equals("conditional") || method.equals("choice")) cases.add(result(xml, "xml", "data.XmlMapper", method, false));
         }

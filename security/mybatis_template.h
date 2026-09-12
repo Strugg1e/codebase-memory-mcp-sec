@@ -18,5 +18,5 @@ typedef struct { const char *name; size_t argument_index; } sf_mb_binding;
  * Conditions and include sites are copied; caller retains their ownership. */
 const char *sf_mybatis_template(yyjson_mut_doc *doc, const sf_operation_source *source,
     const sf_mb_segment *segments, size_t count, const sf_mb_binding *bindings,
-    size_t binding_count, bool incomplete, yyjson_mut_val **result);
+    size_t binding_count, bool xml_property_phase, bool incomplete, yyjson_mut_val **result);
 #endif

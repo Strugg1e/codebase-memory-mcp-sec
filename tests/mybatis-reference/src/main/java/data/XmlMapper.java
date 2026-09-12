@@ -9,4 +9,7 @@ public interface XmlMapper {
     Object choice(@Param("id") long id, @Param("tenant") String tenant);
     Object cdata(@Param("id") long id, @Param("tenant") String tenant);
     Object escaped(@Param("id") long id, @Param("tenant") String tenant);
+    Object escaped_cdata(@Param("id") long id, @Param("tenant") String tenant);
+    Object escaped_include(@Param("id") long id, @Param("tenant") String tenant);
+    Object escaped_hash(@Param("id") long id, @Param("tenant") String tenant);
 }

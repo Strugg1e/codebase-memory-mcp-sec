@@ -50,9 +50,36 @@ class Templates(unittest.TestCase):
         self.assertEqual(len(self.marks(self.xml(SQL+' <!-- #{tenant} -->'))),2)
     def test_cdata_preserves_markers(self):
         self.assertEqual(len(self.marks(self.xml('<![CDATA['+SQL+" AND n='${tenant}']]>") )),3)
-    def test_escaped_opener_not_linked(self):
-        r=self.xml(SQL+r' AND note=\${tenant}');self.assertEqual(len(self.marks(r)),2)
+    def test_xml_escaped_dollar_survives_property_phase(self):
+        r=self.xml(SQL+r' AND note=\${tenant}');self.assertEqual(len(self.marks(r)),3)
+        self.assertEqual(self.marks(r)[-1]['processing'],'xml_property_unescape_then_substitution_candidate')
+        self.assertEqual(self.marks(r)[-1]['argument_index'],1)
         self.assertEqual(len(r['mybatis']['template_analysis']['escaped_markers']),1)
+    def test_double_dollar_escape_is_not_assumed_safe(self):
+        r=self.xml(SQL+r' AND note=\\${tenant}');p=self.marks(r)[-1]
+        self.assertEqual(p['binding_status'],'preprocessing_not_resolved');self.assertNotIn('argument_index',p)
+        self.assertIn('xml_escape_stages_not_resolved',r['gaps'])
+    def test_xml_dollar_preprocessing_assumption_visible(self):
+        p=self.marks(self.xml(SQL+' ${tenant}'))[-1]
+        self.assertEqual(p['parameter_binding_assumption'],'marker_survives_configuration_property_phase')
+    def test_annotation_has_no_xml_property_phase(self):
+        r=self.annotation(mapper(SQL+' ${tenant}'))
+        self.assertEqual(r['mybatis']['template_analysis']['input_kind'],'plain_annotation_literals')
+        self.assertNotIn('parameter_binding_assumption',self.marks(r)[-1])
+    def test_escaped_include_dollar_retains_site(self):
+        r=self.xml('<include refid="a"/>',extra=r"<sql id='a'>SELECT '\${tenant}'</sql>")
+        p=self.marks(r)[0];self.assertEqual(p['argument_index'],1);self.assertEqual(len(p['include_sites']),1)
+    def test_escaped_cdata_dollar_recovered(self):
+        r=self.xml(r"<![CDATA[SELECT '\${tenant}' WHERE id=#{id}]]>")
+        self.assertEqual([p['argument_index'] for p in self.marks(r)],[1,0])
+    def test_escaped_dollar_at_start_of_segment(self):
+        r=self.xml(r'\${tenant}');self.assertEqual(self.marks(r)[0]['argument_index'],1)
+    def test_escaped_dollar_exact_source_reference(self):
+        s=self.session(xml=base.XML.replace('#{tenant}',r"'\${tenant}'"));r=s.inspect();self.assert_refs(s,r)
+        self.assertEqual(self.marks(r)[-1]['escape_source']['text_prefix'],r'\${')
+    def test_multiple_escape_prefix_bounded(self):
+        r=self.xml(SQL+' ' + '\\'*600+'${tenant}');p=self.marks(r)[-1]
+        self.assertTrue(p['escape_source']['text_truncated']);self.assertNotIn('argument_index',p)
     def test_escaped_hash_opener(self):
         self.assertEqual(len(self.marks(self.xml(SQL+r' AND note=\#{tenant}'))),2)
     def test_escaped_close_unknown(self):
@@ -225,7 +252,8 @@ class Templates(unittest.TestCase):
     def test_mutation_kills_value_origin(self):
         s=self.session(caller=base.CALLER.replace('return mapper','tenantId = 0; return mapper'));r=s.inspect()
         self.assertEqual(self.marks(r)[1]['argument_index'],1)
-        flow=r['arguments'][1]['local_value_flow'];self.assertNotIn('tenantId',json.dumps(flow.get('copy_origins',[])))
+        flow=r['arguments'][1]['local_value_flow'];self.assertEqual(flow['formal_parameter_indices'],[])
+        self.assertTrue(flow['literal_possible'])
         self.assertEqual(r['authorization_verdict'],'not_evaluated')
 
 if __name__=='__main__':unittest.main()
