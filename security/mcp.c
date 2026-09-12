@@ -6,6 +6,7 @@
 #include "entry_security.h"
 #include "operation.h"
 #include "flow.h"
+#include "auto_trace.h"
 #include "foundation/sha256.h"
 #include "yyjson.h"
 
@@ -44,6 +45,7 @@ typedef struct {
     size_t parses, hits, failures;
     size_t operation_requests, operation_parses;
     size_t security_requests, security_parses;
+    size_t trace_requests, trace_parses;
     char snapshot_id[65];
 } server;
 
@@ -209,8 +211,16 @@ static const field operation_fields[] = {{"snapshot_id",true,false,64},{"path",t
     {"analysis_id",true,false,64},{"call_id",true,false,64},{"mapper_path",false,false,1024},
     {"mapping_format",false,false,16},{"mapping_path",false,false,1024},{"upstream_calls",false,FIELD_CALL_PATH,SF_FLOW_HOPS},
     {"view",false,false,16},{"argument_index",false,true,63},{"expect_context",false,false,64},{NULL,false,false,0}};
+static const field trace_fields[] = {{"snapshot_id",true,FIELD_TEXT,64},{"path",true,FIELD_TEXT,1024},
+    {"analysis_id",true,FIELD_TEXT,64},{"call_id",true,FIELD_TEXT,64},
+    {"mapper_path",true,FIELD_TEXT,1024},{"mapping_path",false,FIELD_TEXT,1024},
+    {"mapping_format",false,FIELD_TEXT,16},{"scope_paths",true,FIELD_PATH_LIST,SF_TRACE_FILES},
+    {"rule_id",false,FIELD_TEXT,80},{"max_hops",false,FIELD_UINT,SF_FLOW_HOPS},
+    {"max_paths",false,FIELD_UINT,SF_TRACE_PATHS},{"max_edge_checks",false,FIELD_UINT,SF_TRACE_CHECKS},
+    {NULL,false,FIELD_TEXT,0}};
 typedef struct { const char *name, *description; const field *fields; } tool;
 static const tool tools[] = {
+    {"trace_source_to_sink", "Automatically search caller candidates backward from one explicitly selected Java MyBatis call, within scope_paths (max 16 files, total 2 MiB; include the sink file). Built-in rule spring-mybatis-text-substitution matches scalar explicit Spring MVC request bindings on mapped methods and MyBatis ${...} slots. Reuses local value relations and declared target validation; callers need not be supplied. Requires mapper_path and either mapping_path (default XML) or mapping_format=annotation. Returns candidate paths, contexts, rejected/unresolved call candidates, frontiers and budgets; no application-wide scan, runtime dispatch, sanitizer or vulnerability proof. Max four caller hops; cycles and unknowns remain explicit; no source implies no negative security conclusion. Does not load rules or execute code from the target.", trace_fields},
     {"inspect_entry_security", "Inspect Spring Security declarations for an existing Spring entry_id and an explicit config_paths list in the pinned snapshot. Returns chain/rule order, ignoring declarations, source evidence and unknowns. Optional request_method and request_path must be provided together; path means servletPath plus pathInfo, not an external URL. Exact and terminal /** Ant patterns are supported for explicit new AntPathRequestMatcher. String-overload matchers remain unknown unless string_matcher_semantics=ant-path is explicitly supplied as an unverified assumption; default unresolved. No arbitrary matcher execution, URL routing proof, application-wide coverage or security verdict. Selection assumes selected factories are active and no unselected configuration or request rewriting. Missing/unknown earlier matches and order ties are preserved. Config files: max 16, each 256 KiB, total 2 MiB.", security_fields},
     {"query_entry_points", "List Spring MVC declaration-based entry contexts over the pinned file set. Optional path_prefix uses path-component boundaries; handler, route_path and entry_id are exact filters. Unknown path compositions remain candidates under route_path filtering. Follow page.next_cursor even on empty pages; coverage is per page, never whole-repository proof. At most 16 files or 2 MiB are visited per page. Inputs, class/method controls and source references are included; controller registration, external URL, request matching and authorization remain unverified. Reuse call_query for direct handler calls.", entry_fields},
     {"get_snapshot_info", "Describe the pinned explicit file set and real parser cache counters. Not repository coverage or a security verdict.", info_fields},
@@ -334,7 +344,9 @@ static JV *snapshot_info(server *s, JD *d) {
     put(d,security,"cached",boolean(d,false));put(d,r,"entry_security",security);
     JV *entry=object(d); put(d,entry,"schema",text(d,SF_ENTRY_SCHEMA));
     put(d,entry,"catalog_builds",number(d,s->entry_builds)); put(d,entry,"cache_hits",number(d,s->entry_hits));
-    put(d,entry,"capacity_files",number(d,1));put(d,r,"entry_points",entry); return r;
+    put(d,entry,"capacity_files",number(d,1));put(d,r,"entry_points",entry); JV *trace=object(d);put(d,trace,"requests",number(d,s->trace_requests));
+    put(d,trace,"parse_attempts",number(d,s->trace_parses));put(d,r,"source_sink_tracing",trace);
+    return r;
 }
 static JV *file_list(server *s, JD *d, yyjson_val *args, const char **error) {
     size_t offset=0, limit=50; const char *c=str(args,"cursor"), *rest=NULL;
@@ -580,6 +592,45 @@ static bool entry_matches(yyjson_val *entry,yyjson_val *args,bool *uncertain) {
     yyjson_arr_foreach(paths,i,n,v)if(equal(route,yyjson_get_str(v)))return true;
     return false;
 }
+static JV *trace_paths(server *s, JD *d, source_file *f, yyjson_val *args, const char **error) {
+    const char *rule=str(args,"rule_id"), *format=str(args,"mapping_format");
+    if(rule && !equal(rule,SF_TRACE_RULE)){*error="unsupported_trace_rule";return NULL;}
+    if(!equal(f->identity.language,"java")){*error="unsupported_trace_language";return NULL;}
+    sf_query q={.limit=1,.expected_analysis=str(args,"analysis_id"),.fact_id=str(args,"call_id")};
+    *error=sf_query_check(&f->identity,&q);if(*error)return NULL;
+    bool annotation=equal(format,"annotation");
+    if(format && !annotation && !equal(format,"xml")){*error="invalid_mapping_format";return NULL;}
+    const char *mp=str(args,"mapper_path"),*xp=str(args,"mapping_path");
+    if(annotation ? !!xp : !xp){*error="invalid_trace_mapping_inputs";return NULL;}
+    source_file *mapper=lookup(s,mp),*xml=xp?lookup(s,xp):NULL;
+    if(!mapper || (xp&&!xml)){*error="mapping_path_not_in_snapshot";return NULL;}
+    if(!equal(mapper->identity.language,"java") || (xp&&!equal(strrchr(xp,'.'),".xml"))){*error="unsupported_mapping_inputs";return NULL;}
+    if(mapper->size>SF_FLOW_SOURCE || (xml&&xml->size>SF_FLOW_SOURCE)){*error="trace_source_limit_exceeded";return NULL;}
+    sf_operation_source scope[SF_TRACE_FILES];size_t count=0,total_bytes=0,i,n;yyjson_val *item;
+    yyjson_arr_foreach(get(args,"scope_paths"),i,n,item){
+        source_file *v=lookup(s,yyjson_get_str(item));
+        if(!v){*error="trace_path_not_in_snapshot";return NULL;}
+        if(!equal(v->identity.language,"java")){*error="unsupported_trace_language";return NULL;}
+        if(v->size>SF_FLOW_SOURCE || v->size>SF_TRACE_TOTAL-total_bytes){*error="trace_source_limit_exceeded";return NULL;}
+        for(size_t j=0;j<count;j++)if(equal(scope[j].path,v->path)){*error="duplicate_trace_scope_path";return NULL;}
+        total_bytes+=v->size;scope[count++]=(sf_operation_source){v->path,v->source,v->hash,v->size};
+    }
+    size_t hops=get(args,"max_hops")?(size_t)yyjson_get_uint(get(args,"max_hops")):SF_FLOW_HOPS;
+    size_t paths=get(args,"max_paths")?(size_t)yyjson_get_uint(get(args,"max_paths")):SF_TRACE_PATHS;
+    size_t checks=get(args,"max_edge_checks")?(size_t)yyjson_get_uint(get(args,"max_edge_checks")):SF_TRACE_CHECKS;
+    if(!paths || !checks){*error="invalid_trace_budget";return NULL;}
+    *error=analyze(s,f);if(*error)return NULL;
+    sf_selection selection;*error=sf_query_select(&s->cached,&q,&selection);if(*error)return NULL;
+    const sf_fact *call=&s->cached.facts[selection.indices[0]];
+    if(!equal(call->kind,"call_site")){*error="unsupported_operation_anchor";return NULL;}
+    sf_operation_source m={mapper->path,mapper->source,mapper->hash,mapper->size},x={0};
+    if(xml)x=(sf_operation_source){xml->path,xml->source,xml->hash,xml->size};
+    sf_trace_request request={.operation={.snapshot_id=s->snapshot_id,.call_id=q.fact_id,
+        .caller=&s->cached,.call=call,.mapper=&m,.xml=xml?&x:NULL,.annotation_sql=annotation,.parse_attempts=&s->trace_parses},
+        .scope=scope,.scope_count=count,.max_hops=hops,.max_paths=paths,.max_checks=checks};
+    s->trace_requests++;JV *r=NULL;*error=sf_trace_source_to_sink(&request,d,&r);return r;
+}
+
 static JV *query_entries(server *s,JD *d,yyjson_val *args,const char **error) {
     const char *prefix=str(args,"path_prefix"),*framework=str(args,"framework");
     const char *handler=str(args,"handler"),*route=str(args,"route_path"),*entry_id=str(args,"entry_id");
@@ -693,6 +744,7 @@ static JV *call_tool(server *s, JD *d, yyjson_val *params, int *rpc_error) {
             else if (t->fields==location_fields) data=resolve_location(s,d,f,args,&error);
             else if (t->fields==security_fields) data=inspect_security(s,d,f,args,&error);
             else if (t->fields==operation_fields) data=operation_context(s,d,f,args,&error);
+            else if (t->fields==trace_fields) data=trace_paths(s,d,f,args,&error);
             else data=query_facts(s,d,f,args,t->fields==evidence_fields,&error);
         }
     }

@@ -1,5 +1,6 @@
 #include "capabilities.h"
 #include "facts.h"
+#include "auto_trace.h"
 
 const char *sf_product_capabilities(void) {
     return "{\"schema\":\"cbm.sec-capabilities.v1\",\"product\":\"CBM Sec\","
@@ -22,7 +23,7 @@ const char *sf_product_capabilities(void) {
         "\"mybatis_static_includes\":\"same_xml_namespace_bounded_no_properties\","
         "\"location_resolution\":\"pinned_file_hash_and_source_range_candidates\","
         "\"entry_points\":\"spring_mvc_direct_declarations_bounded_snapshot_pages\",\"entry_point_schema\":\"cbm.spring-entry-points.v1\", "
-        "\"agent_guidance\":{\"skill\":\"cbm-sec-evidence\",\"version\":\"0.13.0\",\"hooks\":\"optional_context_only_default_off\"},"
+        "\"agent_guidance\":{\"skill\":\"cbm-sec-evidence\",\"version\":\"0.14.0\",\"hooks\":\"optional_context_only_default_off\"},"
         "\"operation_views\":[\"full\",\"summary\",\"values\"],"
         "\"entry_security\":\"explicit_Spring_configurations_conditional_first_match\","
         "\"entry_security_schema\":\"cbm.spring-security.v1\","
@@ -30,7 +31,11 @@ const char *sf_product_capabilities(void) {
         "\"default_operation_view\":\"full\","
         "\"capability_surfaces\":{\"cli\":\"single_file_syntax_facts\","
         "\"mcp\":\"pinned_snapshot_facts_location_and_operation_queries\"},"
-        "\"not_implemented\":[\"automatic_caller_discovery\",\"live_cbm_graph_import\","
+        "\"source_to_sink\":\"selected_MyBatis_sink_automatic_bounded_backward_search\","
+        "\"source_to_sink_schema\":\"" SF_TRACE_SCHEMA "\","
+        "\"source_sink_rules\":" SF_TRACE_CATALOG_JSON ","
+        "\"automatic_caller_discovery\":\"explicit_scope_declared_target_candidates\","
+        "\"not_implemented\":[\"whole_repository_sink_discovery\",\"live_cbm_graph_import\","
         "\"general_cross_file_return_solver\",\"complete_taint_engine\",\"business_policy_verdict\","
         "\"persistent_security_graph\",\"agent_workflow_orchestration\"],"
         "\"security_verdicts\":false,\"target_execution\":false,"

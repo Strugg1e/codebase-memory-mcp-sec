@@ -5,8 +5,8 @@
 CBM Sec 把固定源码中的入口、调用现场、参数关系、数据操作和安全配置整理为可引用的分析材料。
 Agent 用这些材料继续调查；宿主平台管理任务、业务要求、反证和漏洞结论。
 
-当前为 **`0.13.0-dev` 开发版**。已有受限的 Java 值流和框架关系分析，
-**尚无自动、通用的输入源到危险点追踪能力，也不是完整 SAST 平台。**
+当前为 **`0.14.0-dev` 开发版**。已有受限的 Java 值流和框架关系分析，
+**新增选定 MyBatis 调用的自动反向输入追踪；仍不是通用全仓污点引擎或完整 SAST 平台。**
 
 本项目派生自 [codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp)，
 复用其语法库与基础组件；安全分析使用独立的 `security/` 模块、构建入口和可执行文件。
@@ -33,6 +33,7 @@ Agent 用这些材料继续调查；宿主平台管理任务、业务要求、�
 | Spring MVC 入口 | 直接类级与方法级映射、处理函数、输入和控制声明；快照内有界分页 | 不证明实际注册、外部访问地址或全部入口覆盖 |
 | Java 局部值流 | 受限的变量复制、覆盖、表达式依赖、分支合并 | 不是完整控制流、堆、数组或隐式流分析 |
 | Java 返回摘要 | 同一顶层普通类中符合限定条件的辅助方法；按调用实参组合返回依赖 | 不支持任意跨文件返回或动态分派 |
+| 自动反向路径 | 选定 MyBatis 文本替换调用，自动寻找所选Java文件内的调用者及标量请求来源 | 不自动发现全仓危险点，未建模净化或完整动态分派 |
 | 显式多跳 | 调用方提供最多四个上游调用点；程序逐跳核对声明类型和参数位置 | 不是自动发现整条调用链；候选连接不等于路径可执行 |
 | MyBatis 操作 | 明确 Mapper 的 XML 或有限注解模板、`#{...}`/`${...}`、动态条件、同命名空间静态引用及参数关联 | 不执行模板表达式、Provider 或数据库；不直接判 SQL 注入或租户隔离 |
 | Spring Security 关系 | 显式配置范围内的过滤链、规则顺序、忽略配置与条件选择 | 不证明配置注册或对象授权；路径匹配仅支持文档限定子集及明确假设 |
@@ -42,30 +43,35 @@ Agent 用这些材料继续调查；宿主平台管理任务、业务要求、�
 完整框架范围见 [SECURITY_FRAMEWORKS.md](SECURITY_FRAMEWORKS.md)。
 二进制的 `--capabilities` 和 MCP 的 `get_snapshot_info` 返回同一份产品能力表。
 
-## 能完整追踪 Source → Sink 吗？
+## 能自动追踪 Source → Sink 吗？
 
-**还不能。当前是“对已选操作和已给定调用路径进行有界取证”，不是“自动从全仓库寻找危险流”。**
+**在限定子集中可以：从选定 Java/MyBatis 调用自动搜索上游请求形参，不再要求人工给出路径。**
+
+新工具 `trace_source_to_sink` 使用首条内置规则 `spring-mybatis-text-substitution`，
+在明确文件集合内自动核对调用者并组合已有局部值流。Mapper、映射和根调用仍需选择。
+它不是自动发现全仓库所有危险流，也不证明路径可执行或SQL注入成立。
+完整字段、状态、预算及示例见 [自动路径说明](SECURITY_SOURCE_SINK.md)。
 
 这里的输入源（Source）指被分析规则认定的不可信输入位置；危险点（Sink）指该风险类型关心的操作或参数位置。
 HTTP 路由不自动等于所有输入源，任意调用或数据库操作也不自动等于危险点。
 
-当前可以：选择一次 Java 调用，检查它的实参来源；在已支持的局部语法和显式上游路径内继续关联；
+当前可以：选择一次 Java 调用，检查它的实参来源；使用显式路径，或在新规则的文件范围内自动搜索；
 对于明确的 MyBatis 映射，连接查询模板标记与调用参数。结果同时保留前提、未知项和停止原因。
 
-要形成自动、可复用的源到点分析，还缺少以下共同能力：
+要扩大到通用、可复用的源到点分析，仍需补齐以下能力：
 
 | 环节 | 当前状态 |
 |---|---|
-| 统一的输入源、危险参数、传播与净化规则目录 | 尚未形成通用的、可配置的风险规则层；现有框架声明和模板标记是基础材料 |
-| 自动目标解析与路径发现 | 上游调用、Mapper 和安全配置仍需明确选择；未接入实时 CBM 图 |
+| 统一的输入源、危险参数、传播与净化规则目录 | 已有一条版本化内置规则；尚无通用可配置规则层或净化模型 |
+| 自动目标解析与路径发现 | 已能在显式文件范围内自动核对候选调用者；根调用、Mapper 和安全配置仍需选择，未接入实时 CBM 图 |
 | 更广的值传播 | 循环收敛、完整异常、堆与数组内容、跨文件返回和外部库模型仍有缺口 |
 | 风险相关的阻断关系 | 没有通用净化或校验效果求解；权限规则不能作为清除污点的依据 |
-| 源到点统一查询与验证 | 没有通用 `trace_source_to_sink` 工具；已有专项测试不能代替源到点效果评测 |
+| 源到点统一查询与验证 | 已新增 `trace_source_to_sink`，仅覆盖Java/Spring/MyBatis限定规则；未做真实业务效果评测 |
 
 这些是**尚未完成的内核能力，不是永久排除的产品方向**。
 完整扫描编排、业务规则审批、模型运行和最终漏洞结论仍不属于本内核的职责。
 这里的“未完成”也不意味着要求静态工具证明所有路径都能运行：
-应先在明确的语言、框架和风险子集中完成自动候选追踪，并如实返回分析缺口。
+本版先在明确的语言、框架和风险子集中完成自动候选追踪，并如实返回分析缺口。
 
 三种状态必须分开：
 
@@ -100,6 +106,7 @@ make -f Makefile.security test
 build/security/cbm-security-facts --version
 build/security/cbm-security-facts --capabilities
 python3 security/demo_context.py --mcp build/security/cbm-security-mcp
+python3 security/demo_trace.py --mcp build/security/cbm-security-mcp
 ```
 
 构建需 C 编译器、Make 和 Python 3。产出两个独立 C 可执行文件：
@@ -114,7 +121,7 @@ python3 security/demo_context.py --mcp build/security/cbm-security-mcp
 源码包准备与服务启动见 [SECURITY_MCP.md](SECURITY_MCP.md)，最新接口范围以本页链接的专题文档为准。
 源码包包含完整源码，必须按原源码保护，不提交到公开仓库。
 
-## 九个只读 MCP 工具
+## 十个只读 MCP 工具
 
 | 工具 | 作用 |
 |---|---|
@@ -125,6 +132,7 @@ python3 security/demo_context.py --mcp build/security/cbm-security-mcp
 | `read_snapshot_source` | 按文件哈希和字节范围补读源码 |
 | `resolve_code_location` | 将导航位置转换为候选事实，保留歧义 |
 | `query_entry_points` | 枚举受支持的 Spring MVC 入口关系 |
+| `trace_source_to_sink` | 从选定MyBatis危险参数自动反向搜索请求来源，返回候选和断点 |
 | `inspect_operation_context` | 调查指定 Java 调用、参数关系和可选 MyBatis 映射 |
 | `inspect_entry_security` | 调查指定 Spring 入口与显式配置范围的控制适用关系 |
 
@@ -140,7 +148,8 @@ python3 security/demo_context.py --mcp build/security/cbm-security-mcp
     → Agent 继续调查未知项，宿主保存证据和结论
 ```
 
-入口的方法编号不能当作调用点编号；`upstream_calls` 仍须另行查找并明确提供。
+入口的方法编号不能当作调用点编号。`inspect_operation_context` 的显式路径模式仍需提供
+`upstream_calls`；`trace_source_to_sink` 在指定范围内自行寻找调用者，不接受该参数。
 已有代码位置也可直接走 `resolve_code_location`。不要把上述步骤解释成已实现自动全仓源到点扫描。
 
 ## Skill 与 Hooks
@@ -183,3 +192,9 @@ Spring MVC 注册、MyBatis 模板处理、Spring Security 规则选择分别进
 上游原 README 保存在 [UPSTREAM_README.md](UPSTREAM_README.md)，仅作来源参考，不能作为安全模块的能力声明。
 当前复用基线为 `1db8bace03140f5793ff9205e5281732e77c2bea`，不自动宣称与最新上游同步。
 产品定位已经独立，但代码来源与依赖关系不会因更名而消失。
+
+## 0.14：限定规则内的自动路径
+
+复用既有调用校验与局部值流，新增选定危险参数的反向搜索。
+不需要预填上游路径；保留常量覆盖、未知来源、类型歧义、模板前提及预算断点。
+[使用与限制](SECURITY_SOURCE_SINK.md)；示例：`security/demo_trace.py`。

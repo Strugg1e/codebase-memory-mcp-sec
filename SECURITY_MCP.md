@@ -187,3 +187,10 @@ Harness 必须设置墙钟和内存限制；需要立即中止时终止工作进
 - https://modelcontextprotocol.io/specification/2025-11-25/basic/transports
 - https://modelcontextprotocol.io/specification/2025-11-25/server/tools
 - https://developers.openai.com/codex/mcp/
+
+## v0.14 自动反向路径
+
+新增第十个只读工具 `trace_source_to_sink`。选择根Java调用、Mapper/映射及scope_paths，
+不提供upstream_calls。首条规则为Spring标量请求输入到MyBatis文本替换候选。
+完整参数、状态和预算见 [SECURITY_SOURCE_SINK.md](SECURITY_SOURCE_SINK.md)。
+旧工具继续保持原有输入契约；新工具不是全仓库安全扫描。

@@ -222,7 +222,7 @@ class FlowTests(unittest.TestCase):
     def test_schema_advertises_the_same_bound_as_validation(self):
         s = self.session()
         tools = s.rpc("tools/list", {})["tools"]
-        self.assertEqual(len(tools), 9)
+        self.assertEqual(len(tools), 10)
         schema = next(t for t in tools if t["name"] == "inspect_operation_context")["inputSchema"]["properties"]["upstream_calls"]
         self.assertEqual(schema["type"], "array")
         self.assertEqual(schema["maxItems"], 4)

@@ -229,6 +229,17 @@ done:
     free(a); free(b); return error;
 }
 
+const char *sf_check_declared_call_link(const sf_operation_request *down,
+                                      const sf_operation_request *up,
+                                      yyjson_mut_doc *output, val **link) {
+    if (!down || !up || !down->caller || !up->caller || !down->call || !up->call ||
+        !output || !link) return "invalid_flow_arguments";
+    writer w = {.json=output};
+    *link = object(&w);
+    const char *reason = check_link(down, up, &w, *link);
+    return w.error ? w.error : reason;
+}
+
 typedef struct { val *record, *steps; size_t argument, followed; bool active; } path_state;
 static void path_step(writer *w, path_state *p, val *context, size_t layer) {
     val *a=yyjson_mut_arr_get(get(context,"arguments"),p->argument);

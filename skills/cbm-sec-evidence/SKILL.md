@@ -2,7 +2,7 @@
 name: cbm-sec-evidence
 description: Use CBM Sec to inspect fixed-source entry points, framework declarations, parameter dependencies and supporting code during a code-security investigation. Use when the CBM Sec MCP tools are available or explicitly requested. Not a full scanner, deployment tool, or vulnerability verdict. Do not trigger for unrelated coding or general security discussion.
 metadata:
-  version: "0.13.0"
+  version: "0.14.0"
   evidence-contract: "cbm.spring-entry-points.v1"
 ---
 
@@ -51,3 +51,11 @@ metadata:
 
 需要关联入口与安全配置时，按需读取 [控制关系](references/security-controls.md)。
 使用 `inspect_entry_security`，保留配置范围、匹配前提和未知项；不要把规则选择当成对象授权结论。
+
+## 自动向上追踪已选危险参数
+
+对明确的 MyBatis 调用，可以使用 `trace_source_to_sink` 自动寻找调用者。
+先阅读 [源到点取证](references/source-sink.md)。提供固定快照、调用点、映射和同一应用的
+`scope_paths`，不必提供 `upstream_calls`。仅有内置 Spring/MyBatis 文本替换规则；
+不能把它当成全仓扫描器。读取 `paths` 的同时读取 `frontiers`、`coverage`、预算和模板前提。
+空路径不代表安全，匹配路径不代表注入成立。不要用权限注解清除值依赖。
