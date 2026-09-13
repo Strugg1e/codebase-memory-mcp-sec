@@ -59,3 +59,8 @@ metadata:
 `scope_paths`，不必提供 `upstream_calls`。仅有内置 Spring/MyBatis 文本替换规则；
 不能把它当成全仓扫描器。读取 `paths` 的同时读取 `frontiers`、`coverage`、预算和模板前提。
 空路径不代表安全，匹配路径不代表注入成立。不要用权限注解清除值依赖。
+
+## 字符串处理后的依赖
+
+受支持的字符串操作沿用参数查询和自动回溯；按需读取 [字符串模型](references/string-models.md)。
+核对模型来源、类型前提和未知部分，不把去空白、替换或大小写转换解释成净化。

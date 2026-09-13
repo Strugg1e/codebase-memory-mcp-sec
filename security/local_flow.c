@@ -3,6 +3,7 @@
  * (assignment). This deliberately does NOT implement Java's full semantics.
  * Unknown controls poison values instead of inventing a clean result. */
 #include "local_flow.h"
+#include "java_string_models.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -22,7 +23,7 @@ enum {
     U_EXPRESSION = 16U, U_CONTROL = 32U, U_LIMIT = 64U,
     U_ANCHOR = 128U, U_UNICODE = 256U, U_PARAMETER = 512U,
     U_TARGET = 1024U, U_RECURSION = 2048U, U_SUMMARY_LIMIT = 4096U,
-    U_RETURN = 8192U
+    U_RETURN = 8192U, U_STRING_TYPE = 16384U
 };
 static const struct { unsigned bit; const char *name; } reasons[] = {
     {U_NAME, "local_binding_not_resolved"}, {U_UNINITIALIZED, "local_not_initialized"},
@@ -33,18 +34,19 @@ static const struct { unsigned bit; const char *name; } reasons[] = {
     {U_TARGET, "return_summary_target_not_resolved"},
     {U_RECURSION, "recursive_return_summary_not_solved"},
     {U_SUMMARY_LIMIT, "return_summary_budget_exceeded"},
-    {U_RETURN, "normal_return_not_established"}
+    {U_RETURN, "normal_return_not_established"},
+    {U_STRING_TYPE, "implicit_java_lang_String_requires_no_external_shadow"}
 };
 /* direct and derived are disjoint only per path. A join can have both bits for
  * the same formal: x in one branch and x+1 in the other. Never collapse them. */
 typedef struct {
     uint64_t direct, derived, evidence[LF_WORDS];
-    unsigned unknown;
+    unsigned unknown, java_type;
     bool literal;
 } origin;
-typedef struct { TSNode name; origin value; } variable;
+typedef struct { TSNode name; origin value; unsigned java_type; } variable;
 typedef struct { variable vars[LF_VARS]; size_t count; bool alive; } environment;
-typedef struct { TSNode node; const char *kind; } event;
+typedef struct { TSNode node; const char *kind; const sf_string_return_model *model; } event;
 /* Symbolic returns use callee parameter positions. Evidence numbering is local
  * to each summary and is remapped when the summary is instantiated at a call. */
 typedef struct {
@@ -58,6 +60,8 @@ typedef struct {
     return_summary entries[RS_METHODS];
     size_t count, depth, steps, requests, hits;
     bool limited;
+    sf_string_type_context string_types;
+    size_t string_model_applications;
 } summary_bank;
 typedef yyjson_mut_val value;
 typedef struct {
@@ -107,10 +111,10 @@ static TSNode first_named(TSNode n) {
     } while (ts_tree_cursor_goto_next_sibling(&c));
     ts_tree_cursor_delete(&c); return found;
 }
-static origin unknown(unsigned reason) { return (origin){.unknown = reason}; }
+static origin unknown(unsigned reason) { return (origin){.unknown = reason, .java_type = SF_JT_UNKNOWN}; }
 static origin join(origin a, origin b) {
     a.direct |= b.direct; a.derived |= b.derived; a.unknown |= b.unknown;
-    a.literal |= b.literal;
+    a.literal |= b.literal; a.java_type |= b.java_type;
     for (size_t i = 0; i < LF_WORDS; i++) a.evidence[i] |= b.evidence[i];
     return a;
 }
@@ -132,7 +136,7 @@ static origin stamp(engine *e, origin v, TSNode n, const char *kind) {
     for (; index < e->nevents; index++)
         if (same(e->events[index].node, n) && !strcmp(e->events[index].kind, kind)) break;
     if (index == LF_EVENTS) { e->limited = e->aborted = true; e->prefix_gaps |= U_LIMIT; v.unknown |= U_LIMIT; return v; }
-    if (index == e->nevents) e->events[e->nevents++] = (event){n, kind};
+    if (index == e->nevents) e->events[e->nevents++] = (event){.node=n, .kind=kind};
     v.evidence[index / 64U] |= UINT64_C(1) << (index % 64U);
     return v;
 }
@@ -162,6 +166,41 @@ static void merge_state(engine *e, environment *a, const environment *b, TSNode 
     for (size_t i = 0; i < a->count; i++)
         a->vars[i].value = stamp(e, join(a->vars[i].value, b->vars[i].value), node, "branch_join");
 }
+static origin stamp_model(engine *e, origin v, TSNode n, const sf_string_return_model *model) {
+    v=stamp(e,v,n,"jdk_string_return_model");
+    for (size_t i=0;i<e->nevents;i++)
+        if (same(e->events[i].node,n) && !strcmp(e->events[i].kind,"jdk_string_return_model"))
+            e->events[i].model=model;
+    return v;
+}
+static unsigned declared_type(engine *e, TSNode declaration) {
+    if (!ts_node_is_null(sf_field(declaration,"dimensions"))) return SF_JT_UNKNOWN;
+    return sf_string_declared_type(e->doc,sf_field(declaration,"type"),&e->summaries->string_types);
+}
+static origin string_call(engine *e, TSNode call, origin receiver, const origin *actual, size_t count, bool *matched) {
+    *matched=false;
+    if (!sf_string_type(receiver.java_type) || count>LF_PARAMS) return unknown(U_CALL);
+    char name[96]; unsigned types[LF_PARAMS];
+    if (!sf_node_text(e->doc,sf_field(call,"name"),name,sizeof(name))) return unknown(U_CALL);
+    for (size_t i=0;i<count;i++) types[i]=actual[i].java_type;
+    const sf_string_return_model *model=sf_string_model(name,count,types);
+    if (!model) return unknown(U_CALL);
+    *matched=true; e->summaries->string_model_applications++;
+    origin v=receiver;
+    for (size_t i=0;i<count;i++) {
+        bool literal=v.literal && actual[i].literal;
+        v=join(v,actual[i]); v.literal=literal;
+    }
+    if ((receiver.java_type & SF_JT_IMPLICIT_STRING) ||
+        (model->replace_overload && ((types[0]|types[1]) & SF_JT_IMPLICIT_STRING)) ||
+        (!strcmp(name,"concat") && (types[0] & SF_JT_IMPLICIT_STRING))) v.unknown |= U_STRING_TYPE;
+    if (!model->identity) v=transform(v);
+    /* Under the matched JDK model, a normal return has String type. No claim
+     * is made that the invocation returns normally or the string is safe. */
+    v.java_type=SF_JT_STRING;
+    return stamp_model(e,v,call,model);
+}
+
 static origin expression(engine *, environment *, TSNode, unsigned);
 static void statement(engine *, environment *, TSNode, unsigned);
 static origin summarized_call(engine *, TSNode, const origin *, size_t);
@@ -197,17 +236,23 @@ static origin expression(engine *e, environment *s, TSNode n, unsigned depth) {
     if (!tick(e, depth)) return unknown(U_LIMIT);
     if (is(n, "identifier")) {
         int i = binding(e, s, n);
-        return stamp(e, i >= 0 ? s->vars[i].value : unknown(U_NAME), n, "local_read");
+        origin v=i>=0 ? s->vars[i].value : unknown(U_NAME);
+        if (i>=0) v.java_type=s->vars[i].java_type;
+        return stamp(e,v,n,"local_read");
     }
     if (is(n, "decimal_integer_literal") || is(n, "hex_integer_literal") ||
         is(n, "octal_integer_literal") || is(n, "binary_integer_literal") ||
         is(n, "decimal_floating_point_literal") || is(n, "hex_floating_point_literal") ||
         is(n, "character_literal") || is(n, "string_literal") ||
         is(n, "true") || is(n, "false") || is(n, "null_literal"))
-        return stamp(e, (origin){.literal = true}, n, "literal");
+        return stamp(e, (origin){.literal=true, .java_type=is(n,"string_literal") ? SF_JT_STRING :
+                                              is(n,"character_literal") ? SF_JT_CHAR : SF_JT_UNKNOWN}, n, "literal");
     if (is(n, "parenthesized_expression")) return expression(e, s, first_named(n), depth + 1);
-    if (is(n, "cast_expression"))
-        return stamp(e, transform(expression(e, s, sf_field(n, "value"), depth + 1)), n, "cast_dependency");
+    if (is(n,"cast_expression")) {
+        origin v=transform(expression(e,s,sf_field(n,"value"),depth+1));
+        v.java_type=declared_type(e,n);
+        return stamp(e,v,n,"cast_dependency");
+    }
     if (is(n, "assignment_expression")) {
         TSNode left = sf_field(n, "left"), op = sf_field(n, "operator");
         int index = is(left, "identifier") ? binding(e, s, left) : -1;
@@ -219,7 +264,10 @@ static origin expression(engine *e, environment *s, TSNode n, unsigned depth) {
             v = transform(join(prior, v)); v.literal = literals;
         }
         v = stamp(e, v, n, "assignment");
-        if (index >= 0 && !e->found) s->vars[index].value = v;
+        if (index>=0) {
+            v.java_type=s->vars[index].java_type;
+            if (!e->found) s->vars[index].value=v;
+        }
         return v;
     }
     if (is(n, "update_expression")) {
@@ -245,6 +293,7 @@ static origin expression(engine *e, environment *s, TSNode n, unsigned depth) {
         free(skipped);
         bool literals = left.literal && rhs.literal;
         origin v = transform(join(left, rhs)); v.literal = literals;
+        v.java_type=spells(e,op,"+") && (sf_string_type(left.java_type) || sf_string_type(rhs.java_type)) ? SF_JT_STRING : SF_JT_UNKNOWN;
         return stamp(e, v, n, "binary_dependency");
     }
     if (is(n, "ternary_expression")) {
@@ -261,7 +310,8 @@ static origin expression(engine *e, environment *s, TSNode n, unsigned depth) {
     }
     if (is(n, "method_invocation")) {
         TSNode receiver = sf_field(n, "object");
-        if (!ts_node_is_null(receiver)) (void)expression(e, s, receiver, depth + 1);
+        origin receiver_value=unknown(U_CALL);
+        if (!ts_node_is_null(receiver)) receiver_value=expression(e,s,receiver,depth+1);
         if (e->found || e->aborted) return unknown(U_CALL);
         bool selected = same(n, e->anchor);
         origin actual[LF_PARAMS]; size_t count = 0;
@@ -271,7 +321,9 @@ static origin expression(engine *e, environment *s, TSNode n, unsigned depth) {
             return stamp(e, unknown(U_CALL), n, "unknown_call_return");
         /* Caller locals are independent from callee formals. Only the return
          * relation is instantiated; heap effects and exceptions are not proved. */
-        return summarized_call(e, n, actual, count);
+        bool modeled=false;
+        origin library=string_call(e,n,receiver_value,actual,count,&modeled);
+        return modeled ? library : summarized_call(e,n,actual,count);
     }
     if (is(n, "object_creation_expression")) {
         /* Qualified creation evaluates the expression before '.new'. The
@@ -326,9 +378,13 @@ static void statement(engine *e, environment *s, TSNode n, unsigned depth) {
             if (!is(decl, "variable_declarator")) continue;
             if (s->count == LF_VARS) { e->limited = e->aborted = true; break; }
             size_t at = s->count++;
-            s->vars[at] = (variable){sf_field(decl, "name"), unknown(U_UNINITIALIZED)};
+            s->vars[at] = (variable){.name=sf_field(decl,"name"), .value=unknown(U_UNINITIALIZED), .java_type=SF_JT_UNKNOWN};
             TSNode init = sf_field(decl, "value");
             if (!ts_node_is_null(init)) s->vars[at].value = expression(e, s, init, depth + 1);
+            s->vars[at].java_type=declared_type(e,n);
+            if (spells(e,sf_field(n,"type"),"var")) s->vars[at].java_type=s->vars[at].value.java_type;
+            if (!ts_node_is_null(sf_field(decl,"dimensions"))) s->vars[at].java_type=SF_JT_UNKNOWN;
+            s->vars[at].value.java_type=s->vars[at].java_type;
             s->vars[at].value = stamp(e, s->vars[at].value, decl, "local_declaration");
             if (e->found || e->aborted) break;
         } while (ts_tree_cursor_goto_next_sibling(&c));
@@ -381,8 +437,9 @@ static void init_parameters(engine *e, environment *s, TSNode method) {
         }
         size_t index = e->nparams++;
         e->params[index] = p;
-        s->vars[s->count++] = (variable){sf_field(p, "name"),
-            stamp(e, (origin){.direct = UINT64_C(1) << index}, p, "formal_parameter")};
+        unsigned type=declared_type(e,p);
+        s->vars[s->count++] = (variable){.name=sf_field(p,"name"), .java_type=type,
+            .value=stamp(e,(origin){.direct=UINT64_C(1)<<index,.java_type=type},p,"formal_parameter")};
     } while (ts_tree_cursor_goto_next_sibling(&cursor));
     ts_tree_cursor_delete(&cursor);
 }
@@ -409,7 +466,7 @@ static TSNode summary_target(engine *e, TSNode call, size_t argc) {
     TSNode none = {0}, body = ts_node_parent(e->method), owner = ts_node_parent(body);
     TSNode receiver = sf_field(call, "object"), name = sf_field(call, "name");
     if (!is(body, "class_body") || !is(owner, "class_declaration") ||
-        !is(ts_node_parent(owner), "program") ||
+        !is(ts_node_is_null(ts_node_parent(owner)) ? none : ts_node_parent(owner), "program") ||
         !ts_node_is_null(sf_field(owner, "superclass")) ||
         !ts_node_is_null(sf_field(owner, "interfaces")) ||
         !ts_node_is_null(sf_field(owner, "type_parameters")) ||
@@ -493,7 +550,9 @@ static origin summarized_call(engine *e, TSNode call, const origin *actual, size
     }
     for (size_t i = 0; i < summary->nevents; i++)
         if (summary->returned.evidence[i / 64U] & (UINT64_C(1) << (i % 64U)))
-            v = stamp(e, v, summary->events[i].node, summary->events[i].kind);
+            v = summary->events[i].model ? stamp_model(e,v,summary->events[i].node,summary->events[i].model)
+                                         : stamp(e,v,summary->events[i].node,summary->events[i].kind);
+    v.java_type=declared_type(e,method);
     v = stamp(e, v, method, "return_summary_target");
     return stamp(e, v, call, "return_summary_application");
 }
@@ -551,7 +610,15 @@ static value *render_events(engine *e) {
     value *events = array(e);
     for (size_t i = 0; i < e->nevents; i++) {
         value *v = object(e); num(e, v, "id", i); text(e, v, "kind", e->events[i].kind);
-        put(e, v, "source", ref(e, e->events[i].node)); add(e, events, v);
+        put(e,v,"source",ref(e,e->events[i].node));
+        if (e->events[i].model) {
+            text(e,v,"model_id",e->events[i].model->id);
+            num(e,v,"model_revision",SF_STRING_MODELS_REVISION);
+            text(e,v,"model_basis","Java SE 17 String API");
+            text(e,v,"model_relation",e->events[i].model->identity ? "receiver_value_identity" : "receiver_and_arguments_may_affect_return");
+            flag(e,v,"sanitizer",false);
+        }
+        add(e,events,v);
     }
     return events;
 }
@@ -593,6 +660,9 @@ const char *sf_attach_local_flow(const sf_document *doc, TSNode method, TSNode c
     if (!e || !s || !bank) { free(e); free(s); free(bank); return "out_of_memory"; }
     e->doc = doc; e->anchor = call; e->method = method; e->json = json;
     e->summaries = bank; s->alive = true;
+    TSNode root=method;
+    while (!ts_node_is_null(ts_node_parent(root))) root=ts_node_parent(root);
+    sf_string_types_init(doc,root,&bank->string_types);
     init_parameters(e, s, method);
     for (size_t i = 1; i < doc->source_size; i++)
         if (doc->source[i - 1] == '\\' && doc->source[i] == 'u') {
@@ -618,6 +688,17 @@ const char *sf_attach_local_flow(const sf_document *doc, TSNode method, TSNode c
     flag(e, meta, "truncated", e->limited || bank->limited); num(e, meta, "steps", e->steps);
     put(e, meta, "gaps", reason_list(e, gaps)); put(e, meta, "evidence", render_events(e));
     put(e, meta, "return_summaries", render_summaries(e));
+    value *library=object(e);
+    text(e,library,"schema","cbm.java-string-models.v1");
+    num(e,library,"revision",SF_STRING_MODELS_REVISION);
+    num(e,library,"applications",bank->string_model_applications);
+    num(e,library,"type_context_nodes",bank->string_types.nodes);
+    flag(e,library,"type_context_truncated",bank->string_types.truncated);
+    text(e,library,"scope","current_file_type_hints_and_normal_return_dependencies");
+    text(e,library,"unqualified_String","implicit_import_is_an_explicit_unknown_unless_java_lang_String_is_imported");
+    text(e,library,"exceptions_and_locale","not_evaluated");
+    text(e,library,"sanitization","not_modeled");
+    put(e,meta,"library_models",library);
     put(e, result, "local_value_flow", meta);
     if (e->limited || bank->limited) flag(e, result, "truncated", true);
     const char *error = e->error; free(e); free(s); free(bank); return error;

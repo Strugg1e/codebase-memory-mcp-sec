@@ -14,6 +14,7 @@ const char *sf_product_capabilities(void) {
         "\"framework_details\":\"raw_expressions_and_declarative_roles\","
         "\"framework_runtime_activation\":false,"
         "\"framework_semantics\":\"documented_import_and_syntax_candidates_only\","
+        "\"java_string_return_models\":\"typed_instance_subset_revision_1\",\"java_string_sanitization\":false,"
         "\"java_local_flow\":\"bounded_structured_subset\","
         "\"java_return_summaries\":\"same_top_level_class_non_overridable_methods\","
         "\"java_argument_flow\":\"explicit_selected_callers_max_four_hops\","
