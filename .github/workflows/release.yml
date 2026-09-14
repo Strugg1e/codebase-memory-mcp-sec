@@ -558,6 +558,8 @@ jobs:
           # pkg/npm/package.json can lag behind it in the dispatched commit.
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
+          # Compatibility metadata for the upstream product, not a CBM Sec registration.
+          cp docs/upstream/originals/server.json server.json
           VERSION="${RELEASE_VERSION#v}"
           jq --arg v "$VERSION" '.version = $v | (.packages[].version) = $v' \
             server.json > server.tmp && mv server.tmp server.json

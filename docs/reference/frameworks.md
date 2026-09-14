@@ -1,8 +1,8 @@
 # 0.10 开发版：框架声明与语言生态
 
-> 历史范围说明。0.12 的 XML/注解模式、模板标记修正和静态引用扩展以 [SECURITY_MYBATIS_TEMPLATES.md](SECURITY_MYBATIS_TEMPLATES.md) 为准。
+> 历史范围说明。0.12 的 XML/注解模式、模板标记修正和静态引用扩展以 [SECURITY_MYBATIS_TEMPLATES.md](mybatis-templates.md) 为准。
 
-> 0.11 开发版补充：新增第八个只读工具 `query_entry_points`，以及配套工具使用技能和默认关闭的可选提醒钩子。见 [入口关系](SECURITY_ENTRY_POINTS.md) 与 [Agent 配套](SECURITY_AGENT_GUIDANCE.md)。以下旧版范围保留。
+> 0.11 开发版补充：新增第八个只读工具 `query_entry_points`，以及配套工具使用技能和默认关闭的可选提醒钩子。见 [入口关系](entry-points.md) 与 [Agent 配套](agent-guidance.md)。以下旧版范围保留。
 
 本轮扩展的是已支持语言的框架适配，不是增加完整语言分析器。
 Java、Python、JavaScript、TypeScript、TSX、Go 的语法范围不变；

@@ -332,7 +332,7 @@ class IntegrationTests(unittest.TestCase):
     def test_upstream_readme_preserved_exactly(self):
         from pathlib import Path
         root=Path(__file__).resolve().parents[2]
-        b=(root/'UPSTREAM_README.md').read_bytes()
+        b=(root/'docs/upstream/originals/README.md').read_bytes()
         git_hash=hashlib.sha1(b'blob '+str(len(b)).encode()+b'\0'+b).hexdigest()
         self.assertEqual(git_hash,'c6ab67ee254a614b66c167f104a69a93fb6aaf89')
         self.assertTrue((root/'README.md').read_text().startswith('# CBM Sec'))

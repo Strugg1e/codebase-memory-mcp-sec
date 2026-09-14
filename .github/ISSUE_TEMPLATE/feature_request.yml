@@ -1,33 +1,22 @@
-name: Feature request
-description: Propose an improvement or new capability.
-labels: ["enhancement"]
+name: 功能建议
+description: 说明具体审计问题，以及缺少哪种程序关系或上下文。
 body:
   - type: textarea
     id: problem
     attributes:
-      label: What problem does this solve?
-      description: The situation where the current behavior falls short — concrete examples beat abstractions.
+      label: 想解决的审计问题
+      description: 说明处于侦查、假设生成还是验证阶段，当前工具在哪里停止。
     validations:
       required: true
-
   - type: textarea
-    id: proposal
+    id: scope
     attributes:
-      label: Proposed solution
-      description: What you would like to happen. For new language/LSP support, name the public OSS repos that would make good test beds.
+      label: 语言、框架与最小样例
+      description: 给出脱敏正反例、预期证据和必须保留的未知项，不只增加一个标签名称。
     validations:
       required: true
-
   - type: textarea
-    id: alternatives
+    id: evaluation
     attributes:
-      label: Alternatives considered
-      description: Other approaches and why they fall short (optional).
-
-  - type: checkboxes
-    id: confirmations
-    attributes:
-      label: Confirmations
-      options:
-        - label: I searched existing issues and this is not a duplicate.
-          required: true
+      label: 怎样验证有用且正确
+      description: 说明可比较的框架行为、反例或真实任务指标。

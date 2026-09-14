@@ -49,8 +49,12 @@ jobs:
           mkdir -p "$pkg/bin" "$pkg/docs" "$pkg/licenses"
           cp build/release-gcc/cbm-security-facts build/release-gcc/cbm-security-mcp "$pkg/bin/"
           cp security/demo_flow.py security/pack_snapshot.py "$pkg/"
-          cp SECURITY_PREVIEW.md "$pkg/README.md"
-          cp SECURITY_FACTS.md SECURITY_MCP.md SECURITY_OPERATIONS.md SECURITY_FLOW.md "$pkg/docs/"
+          cp docs/reference/preview-v0.6.md "$pkg/README.md"
+          cp -R docs/. "$pkg/docs/"
+          cp docs/reference/facts.md "$pkg/docs/SECURITY_FACTS.md"
+          cp docs/reference/mcp.md "$pkg/docs/SECURITY_MCP.md"
+          cp docs/reference/operations.md "$pkg/docs/SECURITY_OPERATIONS.md"
+          cp docs/reference/argument-flow.md "$pkg/docs/SECURITY_FLOW.md"
           cp LICENSE THIRD_PARTY.md "$pkg/"
           cp -R build/release-logs "$pkg/test-logs"
           printf '%s\n' "$GITHUB_SHA" > "$pkg/COMMIT.txt"
@@ -93,7 +97,7 @@ jobs:
           PY
           tar -C build/preview-stage -czf "dist/$TAG-linux-x86_64.tar.gz" "$TAG-linux-x86_64"
           git archive --format=tar --prefix="$TAG-source/" "$GITHUB_SHA" | gzip > "dist/$TAG-source.tar.gz"
-          cp SECURITY_PREVIEW.md dist/RELEASE_NOTES.md
+          cp docs/reference/preview-v0.6.md dist/RELEASE_NOTES.md
           printf '\n发布提交：`%s`\n构建与测试：%s/%s/actions/runs/%s\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" >> dist/RELEASE_NOTES.md
           (cd dist && sha256sum *.tar.gz BUILD_INFO.json TEST_RESULTS.json demo-flow-result.json > SHA256SUMS)
           mkdir -p build/package-check

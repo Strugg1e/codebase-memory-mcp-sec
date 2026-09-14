@@ -1,11 +1,15 @@
-## What does this PR do?
+## 改动目的
 
-<!-- Short description of the change and why it is needed. -->
+说明要解决的问题、所依据的源码基线，以及是否包含未合入的本地候选。
 
-## Checklist
+## 范围与验证
 
-- [ ] Every commit is signed off (`git commit -s`) — required, CI rejects
-      unsigned commits ([DCO](../DCO), see [CONTRIBUTING.md](../CONTRIBUTING.md))
-- [ ] Tests pass locally (`make -f Makefile.cbm test`)
-- [ ] Lint passes (`make -f Makefile.cbm lint-ci`)
-- [ ] New behavior is covered by a test (reproduce-first for bug fixes)
+- [ ] 已区分 CBM Sec、复用组件与上游兼容区。
+- [ ] 已运行 `make docs-check`；代码变更附带实际专项测试命令和结果。
+- [ ] 已列出未执行的检查、已知缺口和兼容影响，没有把测试数量当作效果指标。
+- [ ] 新语义有正反例；目录迁移同步检查链接、构建和发行引用。
+- [ ] 贡献者已核对 DCO；仅在本人能够认证时签署，不代签他人。
+
+## 交付状态
+
+说明是否只是文档、是否影响分析、是否需要单独发布。默认不合并主分支、不覆盖历史标签，也不修改用户客户端或钩子配置。

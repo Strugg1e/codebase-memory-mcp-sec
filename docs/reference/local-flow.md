@@ -1,6 +1,6 @@
 # CBM Sec 局部值来源与多跳组合
 
-版本说明：局部值流始于 0.7；0.8 开发版新增同文件受限返回摘要，见 `SECURITY_RETURN_SUMMARIES.md`。
+版本说明：局部值流始于 0.7；0.8 开发版新增同文件受限返回摘要，见 `return-summaries.md`。
 
 本版基于已发布的 `cbm-sec-v0.6.0-preview.1`，继续使用六个只读 MCP 工具。
 不修改主程序、目标源码、既有 Release 标签、Sulliu 或 Codex 配置。不调用大模型。
