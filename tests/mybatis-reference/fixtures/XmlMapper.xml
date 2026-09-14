@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="data.XmlMapper">
+  <sql id="tenantScope">AND tenant_id=#{tenant}</sql>
+  <select id="plain" resultType="map">SELECT * FROM orders WHERE id=#{id} AND tenant_id=#{tenant}</select>
+  <select id="quoted" resultType="map">SELECT * FROM orders WHERE id=#{id} AND tenant_id='${tenant}'</select>
+  <select id="comments" resultType="map">SELECT '#{tenant}' FROM orders WHERE id=#{id} /* ${tenant} */</select>
+  <select id="included" resultType="map">SELECT * FROM orders WHERE id=#{id} <include refid="tenantScope"/></select>
+  <select id="conditional" resultType="map">SELECT * FROM orders <where>id=#{id}<if test="tenant != null">AND tenant_id=#{tenant}</if></where></select>
+  <select id="choice" resultType="map">SELECT * FROM orders <choose><when test="tenant != null">WHERE tenant_id=#{tenant}</when><otherwise>WHERE id=#{id}</otherwise></choose></select>
+  <select id="cdata" resultType="map"><![CDATA[SELECT * FROM orders WHERE id=#{id} AND tenant_id='${tenant}']]></select>
+  <select id="escaped" resultType="map">SELECT '\${tenant}' FROM orders WHERE id=#{id} AND tenant_id=#{tenant}</select>
+  <sql id="escapedScope">AND tenant_id='\${tenant}'</sql>
+  <select id="escaped_cdata" resultType="map"><![CDATA[SELECT '\${tenant}' FROM orders WHERE id=#{id}]]></select>
+  <select id="escaped_include" resultType="map">SELECT * FROM orders WHERE id=#{id} <include refid="escapedScope"/></select>
+  <select id="escaped_hash" resultType="map">SELECT '\#{tenant}' FROM orders WHERE id=#{id}</select>
+</mapper>

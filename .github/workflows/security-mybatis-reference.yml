@@ -1,0 +1,44 @@
+name: MyBatis template reference
+on:
+  pull_request:
+    paths:
+      - 'security/**'
+      - 'tests/security/**'
+      - 'tests/mybatis-reference/**'
+      - 'Makefile.security'
+      - '.github/workflows/security-mybatis-reference.yml'
+permissions:
+  contents: read
+jobs:
+  bound-sql-materials:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Build CBM Sec
+        run: make -f Makefile.security -j2
+      - name: Build pinned test-only MyBatis fixture
+        run: |
+          java -version
+          mvn -B -q -f tests/mybatis-reference/pom.xml compile dependency:build-classpath \
+            -Dmdep.outputFile="$PWD/tests/mybatis-reference/target/deps.classpath"
+      - name: Compare BoundSql with static template materials
+        run: |
+          set -euo pipefail
+          java -cp "tests/mybatis-reference/target/classes:$(cat tests/mybatis-reference/target/deps.classpath)" \
+            reference.TemplateOracle > tests/mybatis-reference/target/reference.json
+          python3 tests/mybatis-reference/compare.py build/security/cbm-security-facts \
+            tests/mybatis-reference/target/reference.json | tee tests/mybatis-reference/target/comparison.json
+      - name: Save reference evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mybatis-template-reference-${{ github.event.pull_request.head.sha }}
+          path: |
+            tests/mybatis-reference/target/reference.json
+            tests/mybatis-reference/target/comparison.json
+            tests/mybatis-reference/target/deps.classpath
+          if-no-files-found: warn
+          retention-days: 7

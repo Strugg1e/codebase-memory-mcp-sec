@@ -1,42 +1,31 @@
 # CBM Sec
 
-**面向证据驱动 AI 代码审计的静态程序分析内核与证据查询服务。**
+**为证据驱动的 AI 代码审计提供静态程序分析和可引用的代码上下文。**
 
-CBM Sec 将源码中的入口、调用现场、参数关系、数据操作和安全配置组织成可引用的材料，帮助审计 Agent 提出具体问题、补充证据并检查反证。它不内置大模型，不替代宿主的调查流程，也不把一条代码路径直接判成漏洞。
+CBM Sec 帮助审计 Agent 查找入口、理解安全配置、核对参数传播和数据操作。它负责回答“代码里有什么、这些值怎样关联、还缺哪些材料”；宿主平台负责提出威胁假设、组织独立验证和生成漏洞报告。
 
-> **先确认分支**：本仓库默认 `main` 的安全代码尚未合入。下表介绍的是安全开发线，而不是当前 `main` 目录已经具备的全部功能。请从 [安全开发分支](https://github.com/Strugg1e/codebase-memory-mcp-sec/tree/feat/security-facts-v0.1) 构建。
+> **版本说明**：默认 `main` 是 CBM Sec 的开发入口，包含安全源码、中文文档和目录整理，程序版本仍为 `0.14.0-dev`。合入主分支不等于发布稳定版。历史 [v0.6 预览包](https://github.com/Strugg1e/codebase-memory-mcp-sec/releases/tag/cbm-sec-v0.6.0-preview.1) 不包含后续开发能力。请以实际提交、构建编号和能力表为准。
 
-[安全开发分支](https://github.com/Strugg1e/codebase-memory-mcp-sec/tree/feat/security-facts-v0.1) · [开发说明](https://github.com/Strugg1e/codebase-memory-mcp-sec/blob/feat/security-facts-v0.1/README.md) · [功能 PR](https://github.com/Strugg1e/codebase-memory-mcp-sec/pull/1) · [历史预览包](https://github.com/Strugg1e/codebase-memory-mcp-sec/releases/tag/cbm-sec-v0.6.0-preview.1)
+[快速开始](docs/getting-started.md) · [工具与能力](docs/tools.md) · [架构与目录](docs/development/repository-layout.md) · [贡献指南](CONTRIBUTING.md) · [文档索引](docs/README.md)
 
-## 为什么做 CBM Sec
+## 用它做什么
 
-证据驱动的 AI SAST 有两项核心工作：找出有仓库依据、合理且可验证的威胁假设；寻找能够支持或推翻假设的证据。
-
-CBM Sec 服务这两项工作。侦查时提供结构和框架材料，验证时计算受支持的程序关系。业务要求、攻击者条件和最终裁决仍由 Agent 与宿主平台组织，避免让每个会话从头搜索和拼接相同代码。
-
-## 当前开发能力
-
-| 方向 | 已有范围 |
+| 审计任务 | CBM Sec 提供的材料 |
 |---|---|
-| 多语言事实 | Java、Python、JavaScript、TypeScript、TSX、Go 的声明、调用点、参数、导入和准确位置 |
-| 框架材料 | Spring、Jakarta/Javax、MyBatis/JPA，以及 Python、Node.js、Go 的部分 Web 框架声明 |
-| Spring MVC 入口 | 受限的类与方法映射、处理函数、输入绑定、控制声明和快照内分页 |
-| Java 值流 | 局部复制、覆盖、表达式依赖、分支合并、受限辅助方法摘要及部分 String 返回模型 |
-| MyBatis 数据访问 | 明确 Mapper 的 XML/有限注解、参数绑定、文本替换、动态条件和参数关联 |
-| Spring Security | 明确配置范围内的过滤链、规则顺序、忽略配置和有条件的选择结果 |
-| 自动回溯 | 从选定 MyBatis 文本替换参数出发，在给定范围内自动寻找上游请求来源，最多四跳 |
-| Agent 配套 | 固定源码包、只读 MCP、概览与完整证据视图、工具技能和默认关闭的可选提醒 |
+| 项目侦查 | 源码文件、声明、调用现场；受支持的 Spring MVC 入口、输入绑定和相关控制声明 |
+| 威胁建模与提出假设 | 有出处的程序和框架材料，供 Agent 解释资产、边界及业务要求；不把推断写成事实 |
+| 假设验证 | 指定操作的参数来源、局部值流、返回值摘要、MyBatis 模板，以及 Spring Security 配置关系 |
+| 自动路径调查 | 从选定的 MyBatis 文本替换参数出发，在给定范围中自动寻找上游请求来源 |
+| 证据复核 | 固定源码版本、文件哈希、字节位置、关系前提和未完成项；可以回取原文 |
 
-开发线的程序版本为 `0.14.0-dev`；实际能力以对应提交的 `--capabilities` 为准。此前单独交付的范围发现、检查点恢复和资源操作本地候选，不自动计入远程已合入功能。历史 v0.6 Release 不包含这些后续开发能力。
+在你的双循环中，它同时服务**“找出合理且可验证的命题”**和**“寻找支持或推翻命题的证据”**。图查询和程序关系不是最终安全结论。
 
-**它还不是通用全仓污点扫描器。** 根调用、Mapper/映射和搜索范围仍需选择；没有通用净化证明、完整对象/数组传播、循环收敛或任意跨文件返回求解。支持某种语言解析，不等于具有与 Java 相同的分析深度。
+## 快速开始
 
-## 构建和试用
-
-需要 C 编译器、Make 和 Python 3；开发验证主要覆盖 Linux x86_64。先切换到安全开发分支：
+需要 C 编译器、Make 和 Python 3。开发验证主要覆盖 Linux x86_64；不沿用上游的跨平台支持承诺。
 
 ```sh
-git clone --branch feat/security-facts-v0.1 --single-branch \
+git clone --branch main --single-branch \
   https://github.com/Strugg1e/codebase-memory-mcp-sec.git
 cd codebase-memory-mcp-sec
 
@@ -44,41 +33,76 @@ make -f Makefile.security
 build/security/cbm-security-facts --version
 build/security/cbm-security-facts --capabilities
 
-# 使用标注测试源码的真实工具回放，不需要模型密钥。
+# 标注测试源码上的真实工具回放，不需要模型密钥。
 python3 security/demo_context.py --mcp build/security/cbm-security-mcp
 python3 security/demo_trace.py --mcp build/security/cbm-security-mcp
 ```
 
-生成 `cbm-security-facts` 和 `cbm-security-mcp` 两个程序。前者读取单文件源码，后者读取宿主固定的源码包并提供 MCP 查询。具体快照、工具和范围见开发分支说明。
+当前也提供 `make`、`make test`、`make docs-check` 和 `make help`。这些命令委托给现有安全构建，不会启动上游图服务或安装客户端配置。
 
-**不要用根目录的原版 `install.sh`、`install.ps1`，或上游 npm/PyPI 包来安装 CBM Sec。** 它们属于尚未整理完成的上游兼容区。
+两个程序分别是 `cbm-security-facts`（单文件事实查询）和 `cbm-security-mcp`（固定快照上的 MCP 服务）。快照准备和启动参数见[快速开始](docs/getting-started.md)。**不要运行原版 `install.sh` 来安装安全工具，也不要将原版 npm/PyPI 包当成 CBM Sec。**
 
-## 与原版 CBM 的区别
+## 已实现到哪里
 
-| 组件 | 职责 |
+| 领域 | 当前范围 |
 |---|---|
-| 原版 CBM | 通用代码索引、符号导航、调用候选与变更影响 |
-| CBM Sec | 固定源码上的程序关系计算、框架取证与证据查询 |
-| 宿主平台，如 Sulliu | 模型与任务管理、业务上下文、独立验证、报告与处理流程 |
+| 语言解析 | Java、Python、JavaScript、TypeScript、TSX、Go；XML 用于 MyBatis 映射，不是通用事实语言 |
+| 框架声明 | Spring、Jakarta/Javax、MyBatis/JPA；FastAPI、Flask、Django/DRF；Express、NestJS、Fastify；Go HTTP、Gin、chi、Echo 的文档化写法 |
+| Java 值流 | 局部复制、覆盖、表达式依赖、分支合并；受限同类辅助方法返回摘要；受类型约束的部分 String 返回模型 |
+| Spring MVC | 类和方法映射、处理函数、输入和控制声明；在选定快照中分页查询 |
+| MyBatis | 明确 Mapper 的 XML/有限注解、参数绑定与文本替换、动态条件、同命名空间静态引用 |
+| Spring Security | 明确配置范围内的链、规则顺序、忽略配置和有条件的匹配选择 |
+| 自动回溯 | 一条内置 Spring/MyBatis 文本替换规则；选定危险调用后自动寻找调用者，最多四跳 |
+| Agent 配套 | `summary` / `values` / `full` 视图；一份工具使用技能；默认关闭的可选会话提醒 |
 
-安全开发线使用独立的 `security/`、`Makefile.security`、可执行文件和工具协议。原版代码图尚未直接导入安全服务，位置对齐也不等于调用关系已证明。
+**不是通用全仓污点扫描器。** 根调用、Mapper/映射和搜索范围仍需选择；没有通用净化证明、完整对象/数组传播、循环收敛或任意跨文件返回求解。其他语言不自动具有 Java 的分析深度。
 
-## 目录和文档说明
+危险点发现、检查点恢复和资源操作视图的本地候选不属于本分支已合入能力，见[交付状态](docs/development/status.md)。最新可执行能力以 `--capabilities` 和 `get_snapshot_info` 为准。
 
-默认分支仍保留较多上游目录，这是源码整合尚未完成的状态，不代表安全产品仍使用全部原版组件。
+## Agent 如何使用
 
-安全代码主要在开发分支的 `security/`；专项测试在 `tests/security/`；工具技能在 `skills/cbm-sec-evidence/`；受控框架参考在 `tests/*-reference/`。语法运行时、语法库和必要基础组件仍从 `internal/cbm/`、`src/foundation/`、`vendored/` 复用。
+```text
+宿主固定源码与分析范围
+    → 查询能力和入口
+    → 选择具体调用现场
+    → 先读操作概览
+    → 按需展开参数关系、安全配置或自动回溯
+    → 回取证据，继续检查反面材料和未知项
+    → 宿主形成限定范围内的安全结论
+```
 
-本首页修订与完整功能 PR 分开，避免中文产品介绍一直等待全部实验代码合入。目录整理和候选功能需要各自检查、评审；本页不暗示已完成这些合并。
+三个区别不能省略：**关系有候选不等于路径必然执行；配置存在不等于实际生效；没有找到路径不等于不存在漏洞。** 源码和注释始终按不可信数据读取。
 
-## 证据与安全边界
+[十个当前 MCP 工具及使用顺序](docs/tools.md)；[Skill 和 Hooks](docs/reference/agent-guidance.md)。工具技能从经过审核的本项目版本加载，不从被审计仓库自动安装。
 
-源码和注释属于不可信数据，不是 Agent 指令。源码包、查询结果和证据可能包含业务代码，应保存在私有产物目录。
+## 仓库导航
 
-调用关系候选、参数传播、安全控制适用性和漏洞成立是不同层次。未找到路径、不支持的语义和超出预算不能统一写成“没有漏洞”。不继承上游的性能、语言深度、平台覆盖、签名或安全扫描宣传。
+```text
+security/                 CBM Sec 分析核心、MCP、快照工具和示例
+skills/cbm-sec-evidence/   核心工具技能与按需参考
+hooks/                    可选会话提醒，默认关闭
+tests/security/           安全模块回归测试
+tests/*-reference/        受控框架/Java 参考实验
+docs/                     中文使用、接口、架构与开发文档
+docs/upstream/            上游原文、原站点和历史分发元数据
+internal/cbm/             复用的语法运行时、语法库及上游抽取代码
+src/foundation/           复用的哈希和随机数等基础组件
+vendored/                 第三方组件及许可
+```
+
+`src/` 的其他模块、`graph-ui/`、`pkg/`、`Formula/`、`Makefile.cbm` 和安装器仍属于上游兼容区，不是本安全产品的默认入口。[完整目录职责与保留原因](docs/development/repository-layout.md)说明哪些能整理、哪些不能直接删除。
+
+## 开发与验证
+
+```sh
+make docs-check   # 中文入口、链接、工具表、迁移记录和许可检查
+make test         # 当前安全模块的真实解析器/MCP 回归
+```
+
+框架参考只运行仓库自带的受控样例，和普通专项测试分开记录。测试数量不等于漏洞召回率，也不代表真实业务环境已验证。详见[验证说明](docs/development/testing.md)。
 
 ## 来源与许可
 
-本项目派生自 [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp)，保留其技术来源与 [MIT 许可证](LICENSE)、[第三方声明](THIRD_PARTY.md)。
+本项目派生自 [DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp)，保留其语法库和基础代码，但安全产品使用独立的分析模块、构建入口和工具协议。当前上游基线为 `1db8bace03140f5793ff9205e5281732e77c2bea`，不宣称已同步最新上游。
 
-原首页按字节保存在 [上游 README 归档](docs/upstream/originals/README.md)，仅作历史来源核对，不作为 CBM Sec 的安装说明、维护者信息或能力承诺。
+遵循 [MIT 许可证](LICENSE)和[第三方声明](THIRD_PARTY.md)。[上游原文归档](docs/upstream/README.md)仅用于来源核对，不代表 CBM Sec 的性能、支持范围、维护者或发布承诺。

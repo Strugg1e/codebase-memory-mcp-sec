@@ -1,4 +1,4 @@
-# Binding ownership policy for codebase-memory-mcp.
+# Binding ownership policy for CBM Sec.
 #
 # This repository is user-owned, so ownership is expressed with individual
 # GitHub handles rather than organization teams.
@@ -9,53 +9,62 @@
 # approval for the matching path.
 
 # Default owner gate: every pull request crosses the project owner's desk.
-* @DeusData
+* @Strugg1e
 
 # Security-sensitive and authority-sensitive surfaces.
-/.github/ @DeusData
-/scripts/ @DeusData
-/Makefile.cbm @DeusData
-/SECURITY.md @DeusData
-/docs/SECURITY-DISCLOSURE.md @DeusData
-/CONTRIBUTING.md @DeusData
-/CODE_OF_CONDUCT.md @DeusData
-/DCO @DeusData
-/LICENSE @DeusData
-/MAINTAINERS.md @DeusData
+/.github/ @Strugg1e
+/scripts/ @Strugg1e
+/Makefile.cbm @Strugg1e
+/SECURITY.md @Strugg1e
+/docs/upstream/site/SECURITY-DISCLOSURE.md @Strugg1e
+/CONTRIBUTING.md @Strugg1e
+/CODE_OF_CONDUCT.md @Strugg1e
+/DCO @Strugg1e
+/LICENSE @Strugg1e
+/MAINTAINERS.md @Strugg1e
 
 # Release and distribution surfaces.
-/pkg/ @DeusData
-/install.sh @DeusData
-/install.ps1 @DeusData
-/server.json @DeusData
-/glama.json @DeusData
-/flake.nix @DeusData
-/flake.lock @DeusData
-/THIRD_PARTY.md @DeusData
-/vendored/ @DeusData
-/internal/cbm/vendored/ @DeusData
+/pkg/ @Strugg1e
+/install.sh @Strugg1e
+/install.ps1 @Strugg1e
+/server.json @Strugg1e
+/glama.json @Strugg1e
+/flake.nix @Strugg1e
+/flake.lock @Strugg1e
+/THIRD_PARTY.md @Strugg1e
+/vendored/ @Strugg1e
+/internal/cbm/vendored/ @Strugg1e
 
 # Core product surfaces.
-/src/foundation/ @DeusData
-/src/store/ @DeusData
-/src/cypher/ @DeusData
-/src/graph_buffer/ @DeusData
-/src/mcp/ @DeusData
-/src/cli/ @DeusData
-/src/discover/ @DeusData
-/src/watcher/ @DeusData
-/src/pipeline/ @DeusData
-/src/git/ @DeusData
-/src/semantic/ @DeusData
-/src/simhash/ @DeusData
-/src/traces/ @DeusData
-/src/ui/ @DeusData
+/src/foundation/ @Strugg1e
+/src/store/ @Strugg1e
+/src/cypher/ @Strugg1e
+/src/graph_buffer/ @Strugg1e
+/src/mcp/ @Strugg1e
+/src/cli/ @Strugg1e
+/src/discover/ @Strugg1e
+/src/watcher/ @Strugg1e
+/src/pipeline/ @Strugg1e
+/src/git/ @Strugg1e
+/src/semantic/ @Strugg1e
+/src/simhash/ @Strugg1e
+/src/traces/ @Strugg1e
+/src/ui/ @Strugg1e
 
 # Extraction, language support, and graph UI.
-/internal/cbm/ @DeusData
-/tools/ @DeusData
-/graph-ui/ @DeusData
+/internal/cbm/ @Strugg1e
+/tools/ @Strugg1e
+/graph-ui/ @Strugg1e
 
 # Test and reproduction infrastructure.
-/tests/ @DeusData
-/test-infrastructure/ @DeusData
+/tests/ @Strugg1e
+/test-infrastructure/ @Strugg1e
+
+# CBM Sec product-specific surfaces.
+/security/ @Strugg1e
+/Makefile.security @Strugg1e
+/Makefile @Strugg1e
+/docs/ @Strugg1e
+/skills/cbm-sec-evidence/ @Strugg1e
+/hooks/ @Strugg1e
+/cbm-sec.json @Strugg1e
