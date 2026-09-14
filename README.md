@@ -4,7 +4,7 @@
 
 CBM Sec 帮助审计 Agent 查找入口、理解安全配置、核对参数传播和数据操作。它负责回答“代码里有什么、这些值怎样关联、还缺哪些材料”；宿主平台负责提出威胁假设、组织独立验证和生成漏洞报告。
 
-> **版本说明**：当前安全功能在 `feat/security-facts-v0.1`，程序版本为 `0.14.0-dev`。默认 `main` 尚未合入安全代码。历史 [v0.6 预览包](https://github.com/Strugg1e/codebase-memory-mcp-sec/releases/tag/cbm-sec-v0.6.0-preview.1) 不包含后续开发能力。请先确认分支，再按本页构建。
+> **版本说明**：默认 `main` 是 CBM Sec 的开发入口，包含安全源码、中文文档和目录整理，程序版本仍为 `0.14.0-dev`。合入主分支不等于发布稳定版。历史 [v0.6 预览包](https://github.com/Strugg1e/codebase-memory-mcp-sec/releases/tag/cbm-sec-v0.6.0-preview.1) 不包含后续开发能力。请以实际提交、构建编号和能力表为准。
 
 [快速开始](docs/getting-started.md) · [工具与能力](docs/tools.md) · [架构与目录](docs/development/repository-layout.md) · [贡献指南](CONTRIBUTING.md) · [文档索引](docs/README.md)
 
@@ -25,7 +25,7 @@ CBM Sec 帮助审计 Agent 查找入口、理解安全配置、核对参数传�
 需要 C 编译器、Make 和 Python 3。开发验证主要覆盖 Linux x86_64；不沿用上游的跨平台支持承诺。
 
 ```sh
-git clone --branch feat/security-facts-v0.1 --single-branch \
+git clone --branch main --single-branch \
   https://github.com/Strugg1e/codebase-memory-mcp-sec.git
 cd codebase-memory-mcp-sec
 
@@ -38,7 +38,7 @@ python3 security/demo_context.py --mcp build/security/cbm-security-mcp
 python3 security/demo_trace.py --mcp build/security/cbm-security-mcp
 ```
 
-此目录整理版本还提供 `make`、`make test`、`make docs-check` 和 `make help`。这些命令委托给现有安全构建，不会启动上游图服务或安装客户端配置。
+当前也提供 `make`、`make test`、`make docs-check` 和 `make help`。这些命令委托给现有安全构建，不会启动上游图服务或安装客户端配置。
 
 两个程序分别是 `cbm-security-facts`（单文件事实查询）和 `cbm-security-mcp`（固定快照上的 MCP 服务）。快照准备和启动参数见[快速开始](docs/getting-started.md)。**不要运行原版 `install.sh` 来安装安全工具，也不要将原版 npm/PyPI 包当成 CBM Sec。**
 
