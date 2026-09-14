@@ -39,7 +39,7 @@ Thumbs.db
 
 # Local project memory (Claude Code auto-memory)
 memory/
-reference/
+/reference/
 
 # Local-only scratch / session notes (never pushed)
 private/

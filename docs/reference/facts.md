@@ -1,4 +1,4 @@
-> 0.10 框架扩展见 [SECURITY_FRAMEWORKS.md](SECURITY_FRAMEWORKS.md)。下列历史范围不是新增生态的完整清单；语言分析深度没有自动提升。
+> 0.10 框架扩展见 [SECURITY_FRAMEWORKS.md](frameworks.md)。下列历史范围不是新增生态的完整清单；语言分析深度没有自动提升。
 
 # 安全事实工具 v0.3
 

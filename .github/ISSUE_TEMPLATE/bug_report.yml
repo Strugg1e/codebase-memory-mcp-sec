@@ -1,136 +1,33 @@
-name: Bug report
-description: Something is wrong — help us reproduce it exactly.
+name: 缺陷报告
+description: 提交可复现的 CBM Sec 问题，不粘贴业务源码或秘密。
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
-      value: |
-        Thanks for the report! The single most valuable thing you can give us
-        is a **reproduction we can run ourselves**.
-
-        **Please do not paste proprietary code or logs.** If the problem
-        shows up on private code, reproduce it with a small dummy snippet or
-        point us at a **public OSS repository** (e.g. zod, django, serilog)
-        plus the file/commit where it happens — that is how we debug here.
-
+      value: 请提供最小脱敏样例；涉及本工具未修复漏洞时，先按 SECURITY.md 寻求私密渠道。
   - type: input
     id: version
     attributes:
-      label: Version
-      description: Output of `codebase-memory-mcp --version`
-      placeholder: codebase-memory-mcp 0.8.1
+      label: 提交、程序版本和构建编号
+      description: 提供 cbm-security-facts --version 和 --capabilities 的相关结果。
     validations:
       required: true
-
-  - type: dropdown
+  - type: input
     id: platform
     attributes:
-      label: Platform
-      options:
-        - macOS (Apple Silicon)
-        - macOS (Intel)
-        - Linux (x64)
-        - Linux (arm64)
-        - Windows (x64)
+      label: 系统、架构和编译方式
+      description: 说明使用源码构建、历史 Release 还是本地候选；不要混用版本。
     validations:
       required: true
-
-  - type: dropdown
-    id: channel
-    attributes:
-      label: Install channel
-      options:
-        - GitHub release archive / install.sh / install.ps1
-        - npm
-        - PyPI
-        - Homebrew
-        - AUR
-        - Scoop / Winget / Chocolatey
-        - go install
-        - Built from source
-    validations:
-      required: true
-
-  - type: dropdown
-    id: variant
-    attributes:
-      label: Binary variant
-      options:
-        - standard
-        - ui
-    validations:
-      required: true
-
   - type: textarea
-    id: what-happened
+    id: reproduce
     attributes:
-      label: What happened, and what did you expect?
-      description: Actual vs. expected behavior, in a few sentences.
+      label: 最小复现与预期/实际结果
+      description: 给出工具名、脱敏参数、源码片段和停止/未知状态。
     validations:
       required: true
-
   - type: textarea
-    id: reproduction
+    id: evidence
     attributes:
-      label: Reproduction
-      description: |
-        The exact steps so we can reproduce it ourselves:
-        1. The code being indexed — a minimal dummy snippet pasted here, or a
-           public repo + commit + file path (e.g. `colinhacks/zod@a1b2c3d,
-           packages/zod/src/v4/core/parse.ts`).
-        2. The exact command or MCP tool call, including JSON arguments
-           (e.g. `codebase-memory-mcp cli search_graph '{"project":"...",
-           "name_pattern":"..."}'`).
-        3. What the output was vs. what it should have been.
-      placeholder: |
-        1. Code: public repo colinhacks/zod @ <commit>, file packages/...
-           — or dummy snippet:
-           ```ts
-           interface Model<T> { create(doc: Partial<T>): Promise<T>; }
-           ```
-        2. Command: codebase-memory-mcp cli index_repository '{"repo_path":"/tmp/zod"}'
-        3. Result: ... / Expected: ...
-    validations:
-      required: true
-
-  - type: textarea
-    id: logs
-    attributes:
-      label: Logs
-      description: |
-        Relevant log output (stderr of the binary; for the UI variant also
-        `GET /api/logs`). Will be auto-formatted as code — no backticks needed.
-        Please check for private paths/strings before pasting.
-      render: text
-
-  - type: textarea
-    id: diagnostics
-    attributes:
-      label: Diagnostics trajectory (memory / performance / leak issues)
-      description: |
-        We collect **no telemetry**, so for a memory or performance problem we
-        need the diagnostics trajectory from your machine. Set
-        `CBM_DIAGNOSTICS=1`, reproduce the issue, then attach (or paste) the file
-        `cbm-diagnostics-<pid>.ndjson` from your temp dir (`$TMPDIR` / `/tmp`, or
-        `%TEMP%` on Windows). It records only resource counters (rss, committed,
-        fds, query counts) over time — no code or queries. See the README
-        "Troubleshooting & Diagnostics" section. Pasting an agent's summary of
-        the trajectory is also fine.
-      render: text
-
-  - type: input
-    id: scale
-    attributes:
-      label: Project scale (if relevant)
-      description: Approximate nodes/edges/files from the indexing summary
-      placeholder: "5,656 nodes / 14,517 edges / 475 files"
-
-  - type: checkboxes
-    id: confirmations
-    attributes:
-      label: Confirmations
-      options:
-        - label: I searched existing issues and this is not a duplicate.
-          required: true
-        - label: My reproduction uses shareable code (a dummy snippet or a public OSS repository), not proprietary code.
-          required: true
+      label: 已检查的证据
+      description: 说明文件范围、对应调用现场、测试命令及结果；不要上传完整私有源码包。

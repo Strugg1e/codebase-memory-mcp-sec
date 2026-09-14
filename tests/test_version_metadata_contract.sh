@@ -100,7 +100,7 @@ fi
 # version that really shipped. Every pin needs a reason below (PIN_REASONS), so
 # a frozen surface can never become an unexplained exemption.
 SURFACES=(
-    "server.json|release"
+    "docs/upstream/originals/server.json|release"
     "pkg/npm/package.json|release"
     "pkg/pypi/pyproject.toml|release"
     "pkg/pypi/src/codebase_memory_mcp/_cli.py|release"
@@ -296,7 +296,7 @@ while IFS= read -r path; do
         "note saying what its number actually is."
 done < <(
     git grep -IlE '(version|pkgver|releases/(download|tag)/v)[^0-9]{0,16}[0-9]+\.[0-9]+\.[0-9]+|return "[0-9]+\.[0-9]+\.[0-9]+"' \
-        -- server.json pkg tests/test_version_metadata_contract.sh 2>/dev/null || true
+        -- docs/upstream/originals/server.json pkg tests/test_version_metadata_contract.sh 2>/dev/null || true
 )
 
 if ((failures > 0)); then

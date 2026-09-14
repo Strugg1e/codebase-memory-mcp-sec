@@ -47,21 +47,21 @@ fi
 
 # --- 3. Every published surface must claim exactly that number. ---
 SURFACES=(
-    README.md
-    docs/index.html
-    docs/llms.txt
+    docs/upstream/originals/README.md
+    docs/upstream/site/index.html
+    docs/upstream/site/llms.txt
     pkg/npm/README.md
     pkg/chocolatey/codebase-memory-mcp.nuspec
     scripts/package-release.sh
-    server.json
+    docs/upstream/originals/server.json
 )
 
 # Files that legitimately say "<N> languages" about something OTHER than the
 # product's registry size. Each entry states what its number actually counts,
 # so an unexplained exemption cannot hide here.
 EXEMPT=(
-    'docs/EVALUATION_PLAN.md'                  # historical plan, pinned to its authoring date
-    'docs/BENCHMARK.md'                        # benchmark corpus subsets (63/17 scored)
+    'docs/upstream/site/EVALUATION_PLAN.md'                  # historical plan, pinned to its authoring date
+    'docs/upstream/site/BENCHMARK.md'                        # benchmark corpus subsets (63/17 scored)
     'scripts/clone-bench-repos.sh'             # bench repo tiers (44 + 22)
     'tests/repro/repro_invariant_breadth.c'    # breadth of one invariant (27/27)
     'tests/repro/repro_grammar_scripting.c'    # scripting-grammar probe scope (12)

@@ -86,7 +86,7 @@ python3 tests/security/test_entry_points.py build/security/cbm-security-facts
 ```
 
 新增72项真实解析器/MCP测试，覆盖关联、参数/控制归属、歧义、动态条件、预算、分页、缓存与精确引用。
-另有固定 Spring 6.2.6 的独立注册对照，见 [测试说明](tests/spring-reference/README.md)。
+另有固定 Spring 6.2.6 的独立注册对照，见 [测试说明](../../tests/spring-reference/README.md)。
 普通专项测试不安装或运行框架；注册对照只执行仓库自带的固定测试应用，不启动 HTTP 服务或被审计项目。
 运行结果应以当前提交日志为准，测试代码存在不代表已经执行。
 

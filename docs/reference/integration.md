@@ -1,14 +1,10 @@
-# 0.9：导航位置交接与按需上下文
+# 导航交接与按需上下文
 
-> 0.11 开发版补充：新增第八个只读工具 `query_entry_points`，以及配套工具使用技能和默认关闭的可选提醒钩子。见 [入口关系](SECURITY_ENTRY_POINTS.md) 与 [Agent 配套](SECURITY_AGENT_GUIDANCE.md)。以下旧版范围保留。
-
-这是可执行的查询接口，不是完整的 CBM/Sulliu 自动集成。
-当前共七个只读 MCP 工具；原六个工具保留，新增 `resolve_code_location`。
-没有新增模型、数据库、持久化图导入、全局客户端安装或扫描流程。
+本页描述已提供的查询接口，不是完整 CBM/Sulliu 自动集成。当前工具见[工具表](../tools.md)。本服务没有持久化原版图导入、全局客户端安装或扫描调度。
 
 ## 1. 宿主固定范围
 
-使用 `SECURITY_MCP.md` 的源码打包器固定明确文件集合，启动受限的 MCP 进程。
+使用[固定快照说明](mcp.md)中的源码打包器固定明确文件集合，启动受限的 MCP 进程。
 用 `get_snapshot_info.product_capabilities` 读取产品能力、版本、实际接口范围及未实现项。
 同一份能力对象也存在于 CLI `--capabilities.product_capabilities`；CLI 本身仍只做语法查询。
 旧 `value_flow=false` 属于历史语法投影标志，不代表安全 MCP 完全没有有界值关系。

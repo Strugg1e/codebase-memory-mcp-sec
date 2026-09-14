@@ -38,7 +38,7 @@ def fail(message):
 
 
 def fresh_fixture():
-    shutil.copy(root / "server.json", fix / "server.json")
+    shutil.copy(root / "docs/upstream/originals/server.json", fix / "server.json")
     (fix / "checksums.txt").write_text(
         f"{SHA_B}  codebase-memory-mcp-windows-amd64.zip\n"
         f"{SHA_B}  codebase-memory-mcp-windows-amd64.mcpb\n"

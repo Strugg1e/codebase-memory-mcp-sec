@@ -1,6 +1,6 @@
 # 业务操作上下文 v0.5
 
-> 历史范围说明。0.12 的 XML/注解模式、模板标记修正和静态引用扩展以 [SECURITY_MYBATIS_TEMPLATES.md](SECURITY_MYBATIS_TEMPLATES.md) 为准。
+> 历史范围说明。0.12 的 XML/注解模式、模板标记修正和静态引用扩展以 [SECURITY_MYBATIS_TEMPLATES.md](mybatis-templates.md) 为准。
 
 本版给 `cbm-security-mcp` 增加第六个只读工具 `inspect_operation_context`。
 它把一次 Java 方法调用、所在方法的局部材料和明确选择的 MyBatis 映射放到同一份证据包。
@@ -27,7 +27,7 @@ Java/XML 均使用仓库已有的 tree-sitter 语法。XML 只用于本工具的
 
 ## 调用顺序
 
-1. 按 `SECURITY_MCP.md` 创建固定源码包。明确选入调用者、Mapper 接口及 XML。
+1. 按 `mcp.md` 创建固定源码包。明确选入调用者、Mapper 接口及 XML。
 2. 调用 `query_security_facts`，在调用者文件中筛选 `kind=call_site`。
 3. 选择目标调用的 `id`，连同返回的 `analysis_id` 传给下面的新工具。
 4. 根据返回的条件、来源和缺口继续审计。不要直接把映射命中作为 Finding。

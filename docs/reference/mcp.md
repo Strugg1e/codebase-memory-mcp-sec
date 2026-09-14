@@ -1,14 +1,6 @@
-# 安全证据 MCP v0.5
+# 固定快照与 MCP 服务
 
-> 0.11 开发版补充：新增第八个只读工具 `query_entry_points`，以及配套工具使用技能和默认关闭的可选提醒钩子。见 [入口关系](SECURITY_ENTRY_POINTS.md) 与 [Agent 配套](SECURITY_AGENT_GUIDANCE.md)。以下旧版范围保留。
-
-
-> 当前 0.9 开发版共七个工具，并新增产品能力说明、位置解析和操作视图。见 [当前接入说明](SECURITY_INTEGRATION.md)。下文六工具和无多跳描述属于历史版本范围。
-`cbm-security-mcp` 是独立的纯 C 只读证据服务，直接复用已有解析和查询核心。
-它不是对原有 CBM MCP 服务直接加工具；原有导航图、数据库、安装器和主构建保持不变。
-`cbm-security-facts` 的单文件 CLI 继续可用，原有字段与框架范围见 `SECURITY_FACTS.md`。
-该文件中的 v0.3“尚无 MCP”描述的是旧版。v0.5 新增的 Java/MyBatis 操作上下文见
-[SECURITY_OPERATIONS.md](SECURITY_OPERATIONS.md)；其候选关联不等于完整跨文件分析。
+本页说明当前独立的 `cbm-security-mcp`。单文件 `cbm-security-facts` 继续提供语法查询。当前十个工具的清单与用途见[工具表](../tools.md)，不再混用历史版本的工具数量。
 
 ## 实际工作方式
 
@@ -30,29 +22,13 @@
 `unsupported_language`，仍可按字节读取。XML 可作为新操作工具的显式映射输入，但不加入
 通用事实抽取语言列表。二进制、含 NUL 或无效 UTF-8 输入拒绝，不静默丢弃。
 
-## 六个只读工具
+## 工具与分页
 
-| 工具 | 用途与边界 |
-|---|---|
-| `get_snapshot_info` | 返回快照编号、文件数、可分析文件数、真实事实缓存及操作解析计数；不是安全覆盖率 |
-| `list_snapshot_files` | 分页列出包中的所有文件，包含不支持通用分析的文件；不会扫描磁盘 |
-| `query_security_facts` | 按 `kind/framework/role/enclosing_id` 精确取交集；沿用原有事实和覆盖信息 |
-| `get_security_evidence` | 用快照、路径、分析编号和事实编号读取单条证据 |
-| `read_snapshot_source` | 用路径、文件哈希和字节范围补读源码，最多 16 KiB，不截断字符 |
-| `inspect_operation_context` | Java 调用的局部参数和分支，以及可选的显式 MyBatis 映射候选；不输出授权结论 |
+当前工具包括事实读取、位置解析、入口、操作、安全配置和自动回溯，见[工具表](../tools.md)。除 `get_snapshot_info` 外，都要求 `snapshot_id`；所有文件必须属于启动时固定的源码包。
 
-除 `get_snapshot_info` 外，都要求 `snapshot_id`。查询路径必须已在包中。
-`get_security_evidence` 还要求 `analysis_id`、`fact_id`；`read_snapshot_source` 要求
-`sha256`、`start_byte`、`end_byte`。起点包含、终点不包含，必须落在 UTF-8 字符边界。
-新操作工具要求 `analysis_id`、`call_id`；可选的 `mapper_path` 与 `mapping_path` 必须一起传入。
+`get_security_evidence` 使用 `analysis_id`、`fact_id`；源码补读使用文件哈希和 UTF-8 半开字节范围。方法编号不能作为调用点编号。Java 操作通过 `analysis_id`、`call_id` 定位，XML 模式提供 Mapper 与映射路径，注解模式明确选择 `mapping_format="annotation"`。
 
-事实查询每页默认 20 条，上限 200。`query_security_facts` 的可选 `expect_analysis` 可预先
-校验分析编号。所属声明查询仍只查询直接归属，不自动证明类级或全局控制适用。
-权限注解、中间件和守卫仍只是候选声明；没有改成“控制已生效”或“漏洞已确认”。
-
-分页使用返回的 `page.next_cursor`，并重复原筛选。MCP 游标额外绑定整个源码包身份，
-不能跨快照、跨文件或跨查询条件混用。它与单文件 CLI 游标不是相同协议；不要混用。
-文件清单使用自身返回的 `next_cursor`。游标不是签名或访问凭据。
+事实查询每页默认 20 条，上限 200。续页使用该工具实际返回的游标并保持筛选条件；入口等查询的空页也可能有后续页。不同工具的游标、源码版本和查询范围不能混用。覆盖状态按页积累，不用最后一页覆盖早期失败。
 
 ## 构建与试用
 
@@ -128,7 +104,7 @@ get_snapshot_info
 筛选和单条证据读取不重复解析；切换文件会替换缓存，再切回时重新解析。缓存仅在当前进程有效。
 `get_snapshot_info.cache` 返回 `parse_attempts`、`hits`、`failed_files`，不使用模拟计数。
 
-新操作工具复用调用点身份检查，但随后按需重新解析最多三个选定文件，当前没有操作上下文缓存。
+操作工具复用调用点身份检查，随后按需解析所选文件；显式多跳另包含上游文件。当前没有跨请求操作上下文缓存。
 它的实际请求与解析次数单独记录在 `get_snapshot_info.operation_context`，不能把原事实缓存命中
 理解成操作工具没有重新解析。映射未知时保留局部 Java 材料及缺口；不返回授权结论。
 
@@ -173,24 +149,8 @@ Harness 必须设置墙钟和内存限制；需要立即中止时终止工作进
 
 ## 验证与未实现范围
 
-`tests/security/test_mcp.py` 测试工具发现、原有五工具、所有六套通用解析器与 CLI 等价性、
-缓存、分页绑定、原始字节、旧版本拒绝、输入边界及启动失败。操作工具由
-`tests/security/test_operation.py` 与 `test_operation_edges.py` 测试真实 Java/XML 解析和 RPC。
-是否已通过请查看当前提交的 CI 日志，测试代码存在不等于已执行。
+`tests/security/test_mcp.py` 验证真实协议、通用解析器与命令行结果、缓存、分页、字节位置、启动和输入边界。其他工具由对应的入口、操作、值流、模板和自动回溯测试验证。以当前提交的真实日志为准，测试文件存在不等于已执行。
 
-本版不增加通用语言或 Web 框架。除了明确选择的 Java/MyBatis 关联候选，仍无传递式跨文件
-调用或值传播、完整安全图、全仓扫描、增量图更新、部署策略、安全控制生效证明或漏洞判定。
-没有自动把服务接进 Sulliu，也没有修改其生产配置。
+生产服务没有全仓持续扫描、任意跨文件返回或完整业务授权判定；已提供有限的跨方法参数关联与自动反向路径。范围见[源到危险参数](source-sink.md)、[操作上下文](operations.md)和[安全配置](entry-security.md)。没有自动接入 Sulliu 或修改客户端配置。
 
-官方参考：
-- https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle
-- https://modelcontextprotocol.io/specification/2025-11-25/basic/transports
-- https://modelcontextprotocol.io/specification/2025-11-25/server/tools
-- https://developers.openai.com/codex/mcp/
-
-## v0.14 自动反向路径
-
-新增第十个只读工具 `trace_source_to_sink`。选择根Java调用、Mapper/映射及scope_paths，
-不提供upstream_calls。首条规则为Spring标量请求输入到MyBatis文本替换候选。
-完整参数、状态和预算见 [SECURITY_SOURCE_SINK.md](SECURITY_SOURCE_SINK.md)。
-旧工具继续保持原有输入契约；新工具不是全仓库安全扫描。
+协议开发依据为 MCP 2025-11-25 生命周期、stdio 传输与工具规范。上面的客户端配置是手工示例，不属于真实客户端兼容性测试结果。

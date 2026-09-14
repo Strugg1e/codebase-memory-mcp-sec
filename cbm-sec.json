@@ -1,0 +1,17 @@
+{
+  "schema": "cbm.sec-repository.v1",
+  "product": "CBM Sec",
+  "repository": "https://github.com/Strugg1e/codebase-memory-mcp-sec",
+  "description": "面向安全审计 Agent 的静态程序分析与证据查询服务",
+  "source": "security/",
+  "build": "Makefile.security",
+  "version_source": "security/facts.h",
+  "documentation": "docs/README.md",
+  "capabilities_source": "security/capabilities.c",
+  "executables": [
+    "cbm-security-facts",
+    "cbm-security-mcp"
+  ],
+  "package_registry_status": "not_declared",
+  "upstream_metadata": "docs/upstream/originals/server.json"
+}
