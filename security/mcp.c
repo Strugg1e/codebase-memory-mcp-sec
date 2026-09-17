@@ -7,6 +7,7 @@
 #include "operation.h"
 #include "flow.h"
 #include "auto_trace.h"
+#include "resource_operations.h"
 #include "foundation/sha256.h"
 #include "yyjson.h"
 
@@ -44,8 +45,12 @@ typedef struct {
     unsigned state;
     size_t parses, hits, failures;
     size_t operation_requests, operation_parses;
+    char *operation_cache;
+    char operation_cache_id[65];
+    size_t operation_cache_bytes, operation_cache_hits, operation_computations, operation_evictions;
     size_t security_requests, security_parses;
-    size_t trace_requests, trace_parses;
+    size_t trace_requests, trace_parses, argument_trace_requests, argument_trace_parses;
+    size_t resource_requests, resource_parses;
     char snapshot_id[65];
 } server;
 
@@ -218,8 +223,20 @@ static const field trace_fields[] = {{"snapshot_id",true,FIELD_TEXT,64},{"path",
     {"rule_id",false,FIELD_TEXT,80},{"max_hops",false,FIELD_UINT,SF_FLOW_HOPS},
     {"max_paths",false,FIELD_UINT,SF_TRACE_PATHS},{"max_edge_checks",false,FIELD_UINT,SF_TRACE_CHECKS},
     {NULL,false,FIELD_TEXT,0}};
+static const field argument_trace_fields[] = {{"snapshot_id",true,FIELD_TEXT,64},{"path",true,FIELD_TEXT,1024},
+    {"analysis_id",true,FIELD_TEXT,64},{"call_id",true,FIELD_TEXT,64},
+    {"argument_index",true,FIELD_UINT,63},{"scope_paths",true,FIELD_PATH_LIST,SF_TRACE_FILES},
+    {"max_hops",false,FIELD_UINT,SF_FLOW_HOPS},{"max_paths",false,FIELD_UINT,SF_TRACE_PATHS},
+    {"max_edge_checks",false,FIELD_UINT,SF_TRACE_CHECKS},{NULL,false,FIELD_TEXT,0}};
+static const field resource_fields[] = {{"snapshot_id",true,FIELD_TEXT,64},
+    {"application_id",true,FIELD_TEXT,128},{"scope_paths",true,FIELD_PATH_LIST,SF_RESOURCE_FILES},
+    {"mapping_format",false,FIELD_TEXT,16},{"operation_kind",false,FIELD_TEXT,16},
+    {"limit",false,FIELD_UINT,SF_RESOURCE_PAGE_TARGETS},{"max_checks",false,FIELD_UINT,SF_RESOURCE_PAGE_CHECKS},
+    {"cursor",false,FIELD_TEXT,96},{NULL,false,FIELD_TEXT,0}};
 typedef struct { const char *name, *description; const field *fields; } tool;
 static const tool tools[] = {
+    {"trace_argument_origins", "Trace one selected Java method-call argument backward through explicit scope_paths, without a Mapper, vulnerability rule or request annotation. argument_index is zero-based. Shares local value analysis and declared-caller validation with trace_source_to_sink. Returns formal-parameter boundary paths, exact call-site evidence, constant/unknown frontiers and unresolved candidates; boundaries are not external input or trusted identities. Caller target candidates do not prove runtime dispatch. Root callee definition is not needed to inspect its actual argument. Max 16 Java files, each 256 KiB, total 2 MiB and four caller hops. Heap contents, loops, general external returns, path feasibility and security verdicts remain unmodeled. Follow gaps even if a path is returned.", argument_trace_fields},
+    {"query_resource_operations", "Enumerate ordinary Java/MyBatis resource-operation candidates, not only dangerous sinks. Required application_id labels one host-selected application; scope_paths contains at most 32 pinned Java/XML files (16 Java, total 2 MiB). Reuses declared-target checks, MyBatis templates, structural mapping checks without local-flow or return-summary evaluation and direct Spring handler containment. Parameterized and constant queries are included. Filters: mapping_format all/xml/annotation, operation_kind read/create/update/delete; unknown kinds remain candidates. Peer groups use application, mapper and exact table spelling, never prove database identity or ownership. Use inspection.tool/arguments to explicitly request deeper evidence. Unresolved declarations are retained independently of call discovery. No automatic entry reachability across methods or authorization verdict. Follow page.next_cursor even on empty pages and retain per-page coverage/attempts; limit and max_checks bound page work.", resource_fields},
     {"trace_source_to_sink", "Automatically search caller candidates backward from one explicitly selected Java MyBatis call, within scope_paths (max 16 files, total 2 MiB; include the sink file). Built-in rule spring-mybatis-text-substitution matches scalar explicit Spring MVC request bindings on mapped methods and MyBatis ${...} slots. Reuses local value relations and declared target validation; callers need not be supplied. Requires mapper_path and either mapping_path (default XML) or mapping_format=annotation. Returns candidate paths, contexts, rejected/unresolved call candidates, frontiers and budgets; no application-wide scan, runtime dispatch, sanitizer or vulnerability proof. Max four caller hops; cycles and unknowns remain explicit; no source implies no negative security conclusion. Does not load rules or execute code from the target.", trace_fields},
     {"inspect_entry_security", "Inspect Spring Security declarations for an existing Spring entry_id and an explicit config_paths list in the pinned snapshot. Returns chain/rule order, ignoring declarations, source evidence and unknowns. Optional request_method and request_path must be provided together; path means servletPath plus pathInfo, not an external URL. Exact and terminal /** Ant patterns are supported for explicit new AntPathRequestMatcher. String-overload matchers remain unknown unless string_matcher_semantics=ant-path is explicitly supplied as an unverified assumption; default unresolved. No arbitrary matcher execution, URL routing proof, application-wide coverage or security verdict. Selection assumes selected factories are active and no unselected configuration or request rewriting. Missing/unknown earlier matches and order ties are preserved. Config files: max 16, each 256 KiB, total 2 MiB.", security_fields},
     {"query_entry_points", "List Spring MVC declaration-based entry contexts over the pinned file set. Optional path_prefix uses path-component boundaries; handler, route_path and entry_id are exact filters. Unknown path compositions remain candidates under route_path filtering. Follow page.next_cursor even on empty pages; coverage is per page, never whole-repository proof. At most 16 files or 2 MiB are visited per page. Inputs, class/method controls and source references are included; controller registration, external URL, request matching and authorization remain unverified. Reuse call_query for direct handler calls.", entry_fields},
@@ -338,14 +355,23 @@ static JV *snapshot_info(server *s, JD *d) {
     JV *operations=object(d);
     put(d,operations,"requests",number(d,s->operation_requests));
     put(d,operations,"parse_attempts",number(d,s->operation_parses));
-    put(d,operations,"cached",boolean(d,false));
+    put(d,operations,"cached",boolean(d,s->operation_cache!=NULL));
+    put(d,operations,"cache_capacity",number(d,1));
+    put(d,operations,"cache_hits",number(d,s->operation_cache_hits));
+    put(d,operations,"computations",number(d,s->operation_computations));
+    put(d,operations,"cache_evictions",number(d,s->operation_evictions));
+    put(d,operations,"cached_bytes",number(d,s->operation_cache_bytes));
     put(d,r,"operation_context",operations);
+    JV *resources=object(d);put(d,resources,"requests",number(d,s->resource_requests));
+    put(d,resources,"source_parse_attempts",number(d,s->resource_parses));put(d,r,"resource_operations",resources);
     JV *security=object(d);put(d,security,"requests",number(d,s->security_requests));put(d,security,"config_parse_attempts",number(d,s->security_parses));
     put(d,security,"cached",boolean(d,false));put(d,r,"entry_security",security);
     JV *entry=object(d); put(d,entry,"schema",text(d,SF_ENTRY_SCHEMA));
     put(d,entry,"catalog_builds",number(d,s->entry_builds)); put(d,entry,"cache_hits",number(d,s->entry_hits));
     put(d,entry,"capacity_files",number(d,1));put(d,r,"entry_points",entry); JV *trace=object(d);put(d,trace,"requests",number(d,s->trace_requests));
     put(d,trace,"parse_attempts",number(d,s->trace_parses));put(d,r,"source_sink_tracing",trace);
+    JV *arguments=object(d);put(d,arguments,"requests",number(d,s->argument_trace_requests));
+    put(d,arguments,"parse_attempts",number(d,s->argument_trace_parses));put(d,r,"argument_origin_tracing",arguments);
     return r;
 }
 static JV *file_list(server *s, JD *d, yyjson_val *args, const char **error) {
@@ -533,28 +559,12 @@ static JV *operation_context(server *s, JD *d, source_file *f, yyjson_val *args,
         }
         upstream[i]=(sf_flow_anchor){&u->identity,check_query.fact_id};
     }
-    *error=analyze(s,f); if (*error) return NULL;
-    sf_selection selection;
-    *error=sf_query_select(&s->cached,&q,&selection); if (*error) return NULL;
-    const sf_fact *call=&s->cached.facts[selection.indices[0]];
-    if (!equal(call->kind,"call_site")) { *error="unsupported_operation_anchor"; return NULL; }
-    sf_operation_source mapper_source={0}, xml_source={0};
-    if (mp) {
-        mapper_source=(sf_operation_source){mapper->path,mapper->source,mapper->hash,mapper->size};
-        if(xp) xml_source=(sf_operation_source){xml->path,xml->source,xml->hash,xml->size};
-    }
-    sf_operation_request request={.snapshot_id=s->snapshot_id,.call_id=q.fact_id,
-        .caller=&s->cached,.call=call,.mapper=mp ? &mapper_source : NULL,.xml=xp ? &xml_source : NULL,
-        .parse_attempts=&s->operation_parses,.annotation_sql=annotation_sql};
-    s->operation_requests++;
-    JV *r=NULL; *error=sf_inspect_operation(&request,d,&r); if (*error) return NULL;
     char key[4096], id[65];
     int n=snprintf(key,sizeof(key),"cbm.operation.v1\n%s\n%s\n%s\n%s\n%s",
         s->snapshot_id,q.expected_analysis,q.fact_id,mp ? mp : "",xp ? xp : (annotation_sql ? "annotation" : ""));
     if (n<0 || (size_t)n>=sizeof(key)) { *error="operation_identity_limit"; return NULL; }
     cbm_sha256_hex(key,(size_t)n,id);
     if (hop_count) {
-        *error=sf_attach_argument_flow(&request,upstream,hop_count,d,r); if (*error) return NULL;
         n=snprintf(key,sizeof(key),"cbm.argument-origin.context.v1\n%s",id);
         cbm_sha256_hex(key,(size_t)n,id);
         for (size_t h=0;h<hop_count;h++) {
@@ -564,11 +574,40 @@ static JV *operation_context(server *s, JD *d, source_file *f, yyjson_val *args,
         }
     }
     if (expected && !equal(expected,id)) { *error="context_mismatch"; return NULL; }
-    put(d,r,"context_id",text(d,id));
-    size_t size=0; char *raw=yyjson_mut_val_write(r,0,&size);
-    if (!raw) oom();
-    free(raw);
-    if (size>SF_MAX_OUTPUT) { *error="output_limit_exceeded"; return NULL; }
+    s->operation_requests++;
+    JV *r=NULL;
+    if(s->operation_cache&&equal(s->operation_cache_id,id)){
+        yyjson_doc *cached=yyjson_read(s->operation_cache,s->operation_cache_bytes,0);
+        if(!cached){*error="operation_cache_invalid";return NULL;}
+        r=check(yyjson_val_mut_copy(d,yyjson_doc_get_root(cached)));yyjson_doc_free(cached);
+        s->operation_cache_hits++;
+    }else{
+        *error=analyze(s,f); if (*error) return NULL;
+        sf_selection selection;
+        *error=sf_query_select(&s->cached,&q,&selection); if (*error) return NULL;
+        const sf_fact *call=&s->cached.facts[selection.indices[0]];
+        if (!equal(call->kind,"call_site")) { *error="unsupported_operation_anchor"; return NULL; }
+        sf_operation_source mapper_source={0}, xml_source={0};
+        if (mp) {
+            mapper_source=(sf_operation_source){mapper->path,mapper->source,mapper->hash,mapper->size};
+            if(xp) xml_source=(sf_operation_source){xml->path,xml->source,xml->hash,xml->size};
+        }
+        sf_operation_request request={.snapshot_id=s->snapshot_id,.call_id=q.fact_id,
+            .caller=&s->cached,.call=call,.mapper=mp ? &mapper_source : NULL,.xml=xp ? &xml_source : NULL,
+            .parse_attempts=&s->operation_parses,.annotation_sql=annotation_sql};
+        *error=sf_inspect_operation(&request,d,&r); if (*error) return NULL;
+        s->operation_computations++;
+        if(hop_count){
+            *error=sf_attach_argument_flow(&request,upstream,hop_count,d,r);if(*error)return NULL;
+        }
+        put(d,r,"context_id",text(d,id));
+        size_t bytes=0;char *full=yyjson_mut_val_write(r,0,&bytes);if(!full)oom();
+        if(bytes>SF_MAX_OUTPUT){free(full);*error="output_limit_exceeded";return NULL;}
+        if(s->operation_cache)s->operation_evictions++;
+        free(s->operation_cache);s->operation_cache=full;s->operation_cache_bytes=bytes;
+        memcpy(s->operation_cache_id,id,sizeof(id));
+    }
+    size_t size=0;char *raw=NULL;
     JV *projected=NULL; *error=sf_operation_view(d,r,args,&projected);
     if (*error) return NULL;
     raw=yyjson_mut_val_write(projected,0,&size); if (!raw) oom(); free(raw);
@@ -592,7 +631,7 @@ static bool entry_matches(yyjson_val *entry,yyjson_val *args,bool *uncertain) {
     yyjson_arr_foreach(paths,i,n,v)if(equal(route,yyjson_get_str(v)))return true;
     return false;
 }
-static JV *trace_paths(server *s, JD *d, source_file *f, yyjson_val *args, const char **error) {
+static JV *trace_paths(server *s, JD *d, source_file *f, yyjson_val *args, const char **error,bool argument_mode) {
     const char *rule=str(args,"rule_id"), *format=str(args,"mapping_format");
     if(rule && !equal(rule,SF_TRACE_RULE)){*error="unsupported_trace_rule";return NULL;}
     if(!equal(f->identity.language,"java")){*error="unsupported_trace_language";return NULL;}
@@ -601,11 +640,11 @@ static JV *trace_paths(server *s, JD *d, source_file *f, yyjson_val *args, const
     bool annotation=equal(format,"annotation");
     if(format && !annotation && !equal(format,"xml")){*error="invalid_mapping_format";return NULL;}
     const char *mp=str(args,"mapper_path"),*xp=str(args,"mapping_path");
-    if(annotation ? !!xp : !xp){*error="invalid_trace_mapping_inputs";return NULL;}
-    source_file *mapper=lookup(s,mp),*xml=xp?lookup(s,xp):NULL;
-    if(!mapper || (xp&&!xml)){*error="mapping_path_not_in_snapshot";return NULL;}
-    if(!equal(mapper->identity.language,"java") || (xp&&!equal(strrchr(xp,'.'),".xml"))){*error="unsupported_mapping_inputs";return NULL;}
-    if(mapper->size>SF_FLOW_SOURCE || (xml&&xml->size>SF_FLOW_SOURCE)){*error="trace_source_limit_exceeded";return NULL;}
+    if(!argument_mode && (annotation ? !!xp : !xp)){*error="invalid_trace_mapping_inputs";return NULL;}
+    source_file *mapper=mp?lookup(s,mp):NULL,*xml=xp?lookup(s,xp):NULL;
+    if((!argument_mode&&!mapper) || (xp&&!xml)){*error="mapping_path_not_in_snapshot";return NULL;}
+    if((mapper&&!equal(mapper->identity.language,"java")) || (xp&&!equal(strrchr(xp,'.'),".xml"))){*error="unsupported_mapping_inputs";return NULL;}
+    if((mapper&&mapper->size>SF_FLOW_SOURCE) || (xml&&xml->size>SF_FLOW_SOURCE)){*error="trace_source_limit_exceeded";return NULL;}
     sf_operation_source scope[SF_TRACE_FILES];size_t count=0,total_bytes=0,i,n;yyjson_val *item;
     yyjson_arr_foreach(get(args,"scope_paths"),i,n,item){
         source_file *v=lookup(s,yyjson_get_str(item));
@@ -623,12 +662,32 @@ static JV *trace_paths(server *s, JD *d, source_file *f, yyjson_val *args, const
     sf_selection selection;*error=sf_query_select(&s->cached,&q,&selection);if(*error)return NULL;
     const sf_fact *call=&s->cached.facts[selection.indices[0]];
     if(!equal(call->kind,"call_site")){*error="unsupported_operation_anchor";return NULL;}
-    sf_operation_source m={mapper->path,mapper->source,mapper->hash,mapper->size},x={0};
+    sf_operation_source m={0},x={0};
+    if(mapper)m=(sf_operation_source){mapper->path,mapper->source,mapper->hash,mapper->size};
     if(xml)x=(sf_operation_source){xml->path,xml->source,xml->hash,xml->size};
     sf_trace_request request={.operation={.snapshot_id=s->snapshot_id,.call_id=q.fact_id,
-        .caller=&s->cached,.call=call,.mapper=&m,.xml=xml?&x:NULL,.annotation_sql=annotation,.parse_attempts=&s->trace_parses},
+        .caller=&s->cached,.call=call,.mapper=mapper?&m:NULL,.xml=xml?&x:NULL,.annotation_sql=annotation,
+        .parse_attempts=argument_mode?&s->argument_trace_parses:&s->trace_parses},
         .scope=scope,.scope_count=count,.max_hops=hops,.max_paths=paths,.max_checks=checks};
-    s->trace_requests++;JV *r=NULL;*error=sf_trace_source_to_sink(&request,d,&r);return r;
+    JV *r=NULL;
+    if(argument_mode){s->argument_trace_requests++;*error=sf_trace_argument_origins(&request,(size_t)yyjson_get_uint(get(args,"argument_index")),d,&r);}
+    else{s->trace_requests++;*error=sf_trace_source_to_sink(&request,d,&r);}
+    return r;
+}
+
+static JV *query_resources(server *s,JD *d,yyjson_val *args,const char **error){
+    sf_operation_source scope[SF_RESOURCE_FILES];size_t count=0,i,n;yyjson_val *item;
+    yyjson_arr_foreach(get(args,"scope_paths"),i,n,item){
+        source_file *f=lookup(s,yyjson_get_str(item));
+        if(!f){*error="resource_path_not_in_snapshot";return NULL;}
+        scope[count++]=(sf_operation_source){f->path,f->source,f->hash,f->size};
+    }
+    sf_resource_request request={.snapshot_id=s->snapshot_id,.application_id=str(args,"application_id"),
+        .scope=scope,.scope_count=count,.mapping_format=str(args,"mapping_format"),.operation_kind=str(args,"operation_kind"),
+        .cursor=str(args,"cursor"),.limit=get(args,"limit")?(size_t)yyjson_get_uint(get(args,"limit")):10,
+        .max_checks=get(args,"max_checks")?(size_t)yyjson_get_uint(get(args,"max_checks")):16,
+        .parse_attempts=&s->resource_parses};
+    s->resource_requests++;JV *result=NULL;*error=sf_query_resource_operations(&request,d,&result);return result;
 }
 
 static JV *query_entries(server *s,JD *d,yyjson_val *args,const char **error) {
@@ -737,6 +796,7 @@ static JV *call_tool(server *s, JD *d, yyjson_val *params, int *rpc_error) {
         if (t->fields==info_fields) data=snapshot_info(s,d);
         else if (t->fields==list_fields) data=file_list(s,d,args,&error);
         else if (t->fields==entry_fields) data=query_entries(s,d,args,&error);
+        else if (t->fields==resource_fields) data=query_resources(s,d,args,&error);
         else {
             source_file *f=lookup(s,str(args,"path"));
             if (!f) error="path_not_in_snapshot";
@@ -744,7 +804,7 @@ static JV *call_tool(server *s, JD *d, yyjson_val *params, int *rpc_error) {
             else if (t->fields==location_fields) data=resolve_location(s,d,f,args,&error);
             else if (t->fields==security_fields) data=inspect_security(s,d,f,args,&error);
             else if (t->fields==operation_fields) data=operation_context(s,d,f,args,&error);
-            else if (t->fields==trace_fields) data=trace_paths(s,d,f,args,&error);
+            else if (t->fields==trace_fields || t->fields==argument_trace_fields) data=trace_paths(s,d,f,args,&error,t->fields==argument_trace_fields);
             else data=query_facts(s,d,f,args,t->fields==evidence_fields,&error);
         }
     }
@@ -831,5 +891,6 @@ int main(int argc, char **argv) {
     sf_document_free(&s->cached); if(s->cached_tree)ts_tree_delete(s->cached_tree);
     if(s->entry_doc)yyjson_doc_free(s->entry_doc);
     if (s->bundle) yyjson_doc_free(s->bundle);
+    free(s->operation_cache);
     free(s); return rc;
 }

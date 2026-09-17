@@ -90,7 +90,7 @@ const char *sf_operation_view(yyjson_mut_doc *doc,V *full,yyjson_val *request,V 
     text(&p,r,"relation_semantics","may_dependencies_not_executable_path_or_security_verdict");
     text(&p,r,"legacy_projection","omitted_use_local_value_flow");
     text(&p,r,"evidence_access",p.summary ? "indexed_evidence_omitted_use_full_request" : "indices_scoped_to_each_local_evidence_table");
-    text(&p,r,"analysis_cost","same_analysis_as_full_no_parse_savings_claimed");
+    text(&p,r,"analysis_cost","view_projection_not_analysis_depth_see_cache_counters");
     if (focused) num(&p,r,"selected_argument_index",focus);
     V *flow=get(full,"argument_flow");
     if (flow) {
