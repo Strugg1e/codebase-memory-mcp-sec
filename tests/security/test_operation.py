@@ -272,12 +272,26 @@ class OperationTests(unittest.TestCase):
 
     def test_repeatability_and_real_work_counters(self):
         s = self.session()
-        a, b = s.inspect(), s.inspect()
+        before = s.call("get_snapshot_info")["operation_context"]
+        a = s.inspect()
+        first = s.call("get_snapshot_info")["operation_context"]
+        b = s.inspect()
+        second = s.call("get_snapshot_info")["operation_context"]
         self.assertEqual(a, b)
-        info = s.call("get_snapshot_info")
-        self.assertEqual(info["operation_context"]["requests"], 2)
-        self.assertEqual(info["operation_context"]["parse_attempts"], 6)
-        self.assertFalse(info["operation_context"]["cached"])
+        self.assertEqual(first["requests"], before["requests"] + 1)
+        self.assertEqual(first["computations"], before["computations"] + 1)
+        self.assertGreater(first["parse_attempts"], before["parse_attempts"])
+        self.assertEqual(first["cache_hits"], before["cache_hits"])
+        self.assertTrue(first["cached"])
+        self.assertEqual(first["cache_capacity"], 1)
+        self.assertGreater(first["cached_bytes"], 0)
+        self.assertEqual(second["requests"], before["requests"] + 2)
+        self.assertEqual(second["computations"], first["computations"])
+        self.assertEqual(second["parse_attempts"], first["parse_attempts"])
+        self.assertEqual(second["cache_hits"], first["cache_hits"] + 1)
+        self.assertEqual(second["cache_evictions"], first["cache_evictions"])
+        self.assertEqual(second["cached_bytes"], first["cached_bytes"])
+        self.assertTrue(second["cached"])
 
     def test_stale_analysis_rejected_before_operation_parse(self):
         s = self.session()
