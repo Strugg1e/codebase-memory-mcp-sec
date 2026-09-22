@@ -1,0 +1,78 @@
+name: CBM Sec one-shot compatibility transfer
+
+on:
+  push:
+    branches: [release/prepare-cbm-sec-v0.15.0-preview.1]
+    paths: [.github/workflows/cbm-sec-compat-transfer.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  prepare-exact-blob:
+    if: github.repository == 'Strugg1e/codebase-memory-mcp-sec' && github.ref == 'refs/heads/release/prepare-cbm-sec-v0.15.0-preview.1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Create only the reviewed three-line compatibility blob
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import urllib.request
+
+          repo = 'Strugg1e/codebase-memory-mcp-sec'
+          branch = 'refs/heads/release/prepare-cbm-sec-v0.15.0-preview.1'
+          if os.environ['GITHUB_REPOSITORY'] != repo or os.environ['GITHUB_REF'] != branch:
+              raise SystemExit('repository_or_branch_mismatch')
+          def blob_id(raw):
+              return hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest()
+          path = Path('tests/test_cli.c')
+          original = path.read_bytes()
+          old_id = 'ae1a5c5f4c7961844bc77dbf4e8f20edca89fafc'
+          expected = 'e7d27eab87a1b6d4f367ef7ce7d8457284d129d2'
+          if blob_id(original) != old_id:
+              raise SystemExit('source_blob_mismatch')
+          changed = original
+          replacements = (
+              ('README.md', 'docs/upstream/originals/README.md'),
+              ('docs/index.html', 'docs/upstream/site/index.html'),
+              ('docs/llms.txt', 'docs/upstream/site/llms.txt'),
+          )
+          for old, new in replacements:
+              before = ('read_test_file_alloc("' + old + '")').encode()
+              after = ('read_test_file_alloc("' + new + '")').encode()
+              if changed.count(before) != 1 or not Path(new).is_file():
+                  raise SystemExit('replacement_or_fixture_mismatch')
+              changed = changed.replace(before, after)
+          if blob_id(changed) != expected:
+              raise SystemExit('result_blob_mismatch')
+          # No source execution, ref update, commit, signature, merge or release.
+          payload = json.dumps({'content': changed.decode('utf-8'), 'encoding': 'utf-8'}).encode()
+          request = urllib.request.Request(
+              'https://api.github.com/repos/' + repo + '/git/blobs',
+              data=payload, method='POST', headers={
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                  'Accept': 'application/vnd.github+json',
+                  'Content-Type': 'application/json',
+              })
+          with urllib.request.urlopen(request, timeout=60) as response:
+              result = json.load(response)
+          if result.get('sha') != expected:
+              raise SystemExit('remote_blob_mismatch')
+          print(json.dumps({'repository': repo, 'path': str(path),
+                            'original_blob': old_id, 'created_blob': expected,
+                            'changed_paths': 3, 'refs_updated': False,
+                            'merged': False, 'released': False}))
+          PY
