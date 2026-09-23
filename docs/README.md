@@ -9,6 +9,7 @@
 | 理解双循环中的职责 | [产品与架构](architecture.md) |
 | 修改代码、定位目录 | [仓库结构](development/repository-layout.md)、[贡献指南](../CONTRIBUTING.md) |
 | 核对验证和版本 | [测试方式](development/testing.md)、[交付状态](development/status.md) |
+| 准备独立预览发布 | [0.15 发布流程](development/preview-release.md) |
 | 核对上游来源 | [上游归档](upstream/README.md) |
 
 ## 按主题查询
