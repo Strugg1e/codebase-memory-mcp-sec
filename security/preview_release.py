@@ -358,12 +358,18 @@ def publish(commit: str, pr_number: int, directory: Path) -> None:
     print(json.dumps({"tag": TAG, "draft_release_id": release_id, "published": False}), flush=True)
     run(["gh", "release", "upload", TAG, *[str(directory / n) for n in (*ASSETS, "SHA256SUMS")],
          "--repo", REPO], timeout=900)
-    with tempfile.TemporaryDirectory(prefix="cbm-sec-release-readback-") as temporary:
-        downloaded = Path(temporary)
-        run(["gh", "release", "download", TAG, "--repo", REPO, "--dir", str(downloaded)], timeout=900)
-        require((directory / "SHA256SUMS").read_bytes() == (downloaded / "SHA256SUMS").read_bytes(),
-                "downloaded checksum manifest mismatch")
-        verify_assets(downloaded, commit)
+    expected_manifest = (directory / "SHA256SUMS").read_bytes()
+
+    def verify_download() -> None:
+        # Each readback uses a new directory; public bytes cannot reuse draft files.
+        with tempfile.TemporaryDirectory(prefix="cbm-sec-release-readback-") as temporary:
+            downloaded = Path(temporary)
+            run(["gh", "release", "download", TAG, "--repo", REPO, "--dir", str(downloaded)], timeout=900)
+            require(expected_manifest == (downloaded / "SHA256SUMS").read_bytes(),
+                    "downloaded checksum manifest mismatch")
+            verify_assets(downloaded, commit)
+
+    verify_download()
     observed = gh_json(f"releases/{release_id}")
     require(observed.get("draft") is True and observed.get("prerelease") is True
             and observed.get("tag_name") == TAG, "draft state changed")
@@ -374,12 +380,19 @@ def publish(commit: str, pr_number: int, directory: Path) -> None:
     require(gh_json("git/ref/tags/" + TAG)["object"]["sha"] == commit, "tag changed before publication")
     gh_json(f"releases/{release_id}", method="PATCH",
             payload={"draft": False, "prerelease": True, "make_latest": "false"})
+    # Publication is not completion until the public attachment bytes are verified.
+    # A failure here leaves the remote release intact for inspection, not rollback.
+    verify_download()
     final = gh_json(f"releases/{release_id}")
     require(final.get("draft") is False and final.get("prerelease") is True and final.get("tag_name") == TAG,
             "published state not confirmed")
+    final_assets = final.get("assets", [])
+    require(len(final_assets) == len(ASSETS) + 1
+            and {a["name"] for a in final_assets} == set(ASSETS) | {"SHA256SUMS"},
+            "published asset set mismatch")
     require(gh_json("git/ref/tags/" + TAG)["object"]["sha"] == commit, "published tag target mismatch")
     print(json.dumps({"published": True, "release_id": release_id, "tag": TAG,
-                      "commit": commit, "assets": len(assets), "url": final["html_url"]}))
+                      "commit": commit, "assets": len(final_assets), "url": final["html_url"]}))
 
 
 def main() -> int:

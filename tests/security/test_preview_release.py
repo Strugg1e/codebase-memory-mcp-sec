@@ -265,6 +265,7 @@ class GuardTests(unittest.TestCase):
     def publish_fixture(self, failure=None):
         self.assets()
         calls = []
+        downloads = []
         def api(endpoint, **kw):
             calls.append((endpoint, kw))
             if endpoint == "git/refs": return {}
@@ -273,9 +274,13 @@ class GuardTests(unittest.TestCase):
             if endpoint == "releases/7" and kw.get("method") == "PATCH": return {}
             if endpoint == "releases/7":
                 published = any(k.get("method") == "PATCH" for _, k in calls)
+                assets = [{"name": n} for n in (*release.ASSETS, "SHA256SUMS")]
+                if published and failure == "published_missing": assets.pop()
+                if published and failure == "published_extra": assets.append({"name": "extra.txt"})
+                if published and failure == "published_duplicate": assets[-1] = assets[0].copy()
                 return {"draft": not published, "prerelease": True, "tag_name": release.TAG,
                         "html_url": "https://github.com/" + release.REPO + "/releases/tag/" + release.TAG,
-                        "assets": [{"name": n} for n in (*release.ASSETS, "SHA256SUMS")]}
+                        "assets": assets}
             raise AssertionError("unexpected API endpoint: " + endpoint)
         def command(args, **kw):
             self.assertNotIn("--clobber", args)
@@ -284,19 +289,35 @@ class GuardTests(unittest.TestCase):
             elif args[:3] == ["gh", "release", "download"]:
                 import shutil
                 target = Path(args[args.index("--dir") + 1])
+                published = any(k.get("method") == "PATCH" for _, k in calls)
+                downloads.append(published)
+                if published and failure == "published_download_error":
+                    raise release.Blocked("fixture public download failure")
                 for f in self.root.iterdir(): shutil.copy2(f, target / f.name)
-                if failure == "download": (target / release.ASSETS[0]).write_text("tampered")
+                if failure == "download" or published and failure == "published_tamper":
+                    (target / release.ASSETS[0]).write_text("tampered")
+                if published and failure == "published_manifest":
+                    (target / "SHA256SUMS").write_text("changed manifest")
             else: raise AssertionError("unexpected command")
             return ""
         env = {"GITHUB_REPOSITORY": release.REPO, "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": SHA}
         with patch.dict("os.environ", env, clear=True), patch.object(release, "check_source", return_value={}), \
              patch.object(release, "remote_gate", return_value={}), patch.object(release, "remote_pr_checks", return_value={}), \
              patch.object(release, "gh_json", side_effect=api), \
-             patch.object(release, "run", side_effect=command), contextlib.redirect_stdout(io.StringIO()):
+             patch.object(release, "run", side_effect=command), contextlib.redirect_stdout(io.StringIO()) as output:
             if failure:
                 with self.assertRaises(release.Blocked): release.publish(SHA, 5, self.root)
+                self.assertFalse(any(json.loads(line).get("published") is True
+                                     for line in output.getvalue().splitlines()))
+                if failure.startswith("published_"):
+                    self.assertEqual(downloads, [False, True])
+                    self.assertEqual(sum(kw.get("method") == "PATCH" for _, kw in calls), 1)
             else:
                 release.publish(SHA, 5, self.root)
+                self.assertEqual(downloads, [False, True], "verify both draft and public bytes")
+                result = json.loads(output.getvalue().splitlines()[-1])
+                self.assertTrue(result["published"])
+                self.assertEqual(result["assets"], len(release.ASSETS) + 1)
         return calls
 
     def test_mock_publication_draft_before_upload_and_no_latest(self):
@@ -315,6 +336,24 @@ class GuardTests(unittest.TestCase):
     def test_download_hash_failure_leaves_draft_unpublished(self):
         calls = self.publish_fixture("download")
         self.assertFalse(any(kw.get("method") == "PATCH" for _, kw in calls))
+
+    def test_public_readback_rejects_missing_asset(self):
+        self.publish_fixture("published_missing")
+
+    def test_public_readback_rejects_extra_asset(self):
+        self.publish_fixture("published_extra")
+
+    def test_public_readback_rejects_duplicate_asset(self):
+        self.publish_fixture("published_duplicate")
+
+    def test_public_readback_rejects_changed_bytes(self):
+        self.publish_fixture("published_tamper")
+
+    def test_public_readback_rejects_changed_manifest(self):
+        self.publish_fixture("published_manifest")
+
+    def test_public_download_failure_does_not_report_completion(self):
+        self.publish_fixture("published_download_error")
 
     def test_transport_errors_are_not_missing_tags(self):
         failure = subprocess.CompletedProcess([], 1, '{"status":"403"}', "forbidden")
