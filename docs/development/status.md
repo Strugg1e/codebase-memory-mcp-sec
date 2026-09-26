@@ -1,6 +1,12 @@
 # 交付状态与版本口径
 
-## 2026-09-21 整合检查基线
+## 2026-09-26 独立证据交接实现
+
+在已核验整合分支 `0c0bca15...` 基础上，按用户批准的产品完善计划独立增加 `security/export_evidence.py`、`security/demo_evidence.py` 与 `tests/security/test_evidence_bundle.py`。保存真实请求、程序身份和完整操作结果，核对源码引用并支持另一进程复核；不改变关系求解、不自动汇总安全判断。
+
+这不是原始候选文件或其历史验证的恢复。与将来取得的原包仍须逐文件比较，不能用同名新文件、专项数量或当前成功回放满足原候选身份验收。原有发布门禁和 DCO 不变；本批实现不代表 main 已合并或预览版已发布。调用和限制见[离线证据交接](../reference/evidence-handoff.md)。
+
+## 2026-09-21 整合检查基线（历史记录）
 
 本页记录本次检查时的状态，不把源码中的版本字符串当作已发布版本。最终是否合并、发布，应分别核对 PR 的 merged 字段、远程 main、标签目标和 Release 附件。
 
@@ -32,7 +38,7 @@
 |---|---|
 | `tests/security/test_argument_origins.py`、`security/demo_arguments.py` | 原始候选专项及回放未同步 |
 | 资源操作和操作缓存的新增专项与示例 | 原始候选完整测试集未同步，已有兼容测试不替代它们 |
-| `security/export_evidence.py`、导出测试及示例 | 离线导出功能尚未完整进入远程 |
+| 原候选 `security/export_evidence.py`、导出测试及示例 | 原件未恢复；本批独立实现见上，不合并计算历史测试 |
 | `tests/java-argument-reference/` | 原始受控 Java 参考未同步 |
 | 完整候选参考文档和技能附件 | 当前接口说明已做兼容修正，仍需与原包逐项比较 |
 

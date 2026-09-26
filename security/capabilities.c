@@ -45,6 +45,11 @@ const char *sf_product_capabilities(void) {
         "\"not_implemented\":[\"whole_repository_sink_discovery\",\"live_cbm_graph_import\","
         "\"general_cross_file_return_solver\",\"complete_taint_engine\",\"business_policy_verdict\","
         "\"persistent_security_graph\",\"agent_workflow_orchestration\"],"
+        "\"offline_evidence\":{\"program\":\"security/export_evidence.py\","
+        "\"capture_schema\":\"cbm.operation-capture.v1\","
+        "\"bundle_schema\":\"cbm.source-evidence-bundle.v1\","
+        "\"scope\":\"saved_full_operation_source_references_only\","
+        "\"platform\":\"posix\",\"program_relations_reverified\":false},"
         "\"security_verdicts\":false,\"target_execution\":false,"
         "\"configuration_installation\":false,\"source_trust\":\"untrusted_data_not_instructions\"}";
 }

@@ -21,6 +21,7 @@
 | Java 程序关系 | [操作上下文](reference/operations.md)、[显式多跳](reference/argument-flow.md)、[局部值流](reference/local-flow.md) |
 | 返回值 | [辅助方法摘要](reference/return-summaries.md)、[String 模型](reference/string-models.md) |
 | 数据访问和安全配置 | [MyBatis 模板](reference/mybatis-templates.md)、[Spring Security](reference/entry-security.md) |
+| 离线证据交接 | [完整结果保存、导出与复核](reference/evidence-handoff.md) |
 | 自动回溯 | [源到危险参数](reference/source-sink.md) |
 | 历史设计和发布 | [早期职责说明](reference/product-boundaries.md)、[v0.6 预览说明](reference/preview-v0.6.md) |
 

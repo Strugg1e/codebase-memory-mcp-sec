@@ -41,7 +41,7 @@ argument_index 从零开始。不接受 mapper_path、mapping_path、rule_id 或
 
 未解析的调用者保留当前边界，不虚构上游。已知路径、常量分支与未知分支可以并存。queue_exhausted 只说明本次队列结束，不证明应用分析完整。未处理状态不会在报告阶段触发新深度分析，local_relation 可为 null。
 
-证据编号只属于对应 contexts[index].operation。内部操作结果没有 MCP 完整响应的 context_id；需要完整身份时，使用真实 anchor 显式调用 inspect_operation_context(view="full")，不能自行补造编号。离线导出器尚待整合，这里不把原候选中的导出步骤当作当前可运行能力。
+证据编号只属于对应 contexts[index].operation。内部操作结果没有 MCP 完整响应的 context_id；需要完整身份时，使用真实 anchor 显式调用 inspect_operation_context(view="full")，不能自行补造编号。现有[独立离线交接脚本](evidence-handoff.md)只接受显式取得的单操作完整结果，不导出本查询的全部结果；搜索范围、预算、frontiers 和未知项仍由宿主原样保留。该脚本不冒充原候选恢复。
 
 ## 关系与限制
 

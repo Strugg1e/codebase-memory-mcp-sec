@@ -4,7 +4,7 @@
 
 CBM Sec 帮助审计者找入口和数据操作，核对指定调用的参数关系，并回查固定源码中的证据。它不负责业务规则认定、假设调度或最终漏洞裁决，也不是完整 AI SAST 平台。
 
-> **当前是未完成的预览整合分支。** 程序内部版本为 `0.15.0-preview.1`，注册十二个只读 MCP 工具；完整候选的新增专项、示例和离线导出脚本仍待整合。版本字符串不表示已发布。2026-09-21 检查时，`main` 仍为 `bec1cd1...` / `0.14.0-dev`，PR #5 尚未合并。[交付状态](docs/development/status.md)分别记录代码、验证和发布状态。历史 [v0.6 预览包](https://github.com/Strugg1e/codebase-memory-mcp-sec/releases/tag/cbm-sec-v0.6.0-preview.1) 不包含本次新增核心能力。
+> **当前是未完成的预览整合分支。** 程序内部版本为 `0.15.0-preview.1`，注册十二个只读 MCP 工具；原始候选的新增专项和示例仍待核验；现已独立实现单操作离线证据交接，不代表原候选恢复。版本字符串不表示已发布。2026-09-21 检查时，`main` 仍为 `bec1cd1...` / `0.14.0-dev`，PR #5 尚未合并。[交付状态](docs/development/status.md)分别记录代码、验证和发布状态。历史 [v0.6 预览包](https://github.com/Strugg1e/codebase-memory-mcp-sec/releases/tag/cbm-sec-v0.6.0-preview.1) 不包含本次新增核心能力。
 
 [快速开始](docs/getting-started.md) · [工具与能力](docs/tools.md) · [目录职责](docs/development/repository-layout.md) · [贡献指南](CONTRIBUTING.md) · [文档索引](docs/README.md)
 
@@ -53,7 +53,7 @@ python3 security/demo_flow.py --mcp build/security/cbm-security-mcp
 
 不是通用全仓污点扫描器。没有完整 Java 类型解析、通用运行时调用图、完整对象/数组内容传播、任意跨文件返回求解或净化证明。其他语言不自动具有 Java 的分析深度。源码引用真实不等于关系正确，关系存在不等于路径必然执行，到达形参不等于攻击者可控。
 
-离线导出器、新增专项与受控 Java 参考仍列在[待整合清单](docs/development/status.md)中。范围扫描、检查点恢复和历史 CFG/finally 实验不在本次交付范围。
+已独立实现[完整操作结果的离线交接](docs/reference/evidence-handoff.md)及受控回放；原始候选、新增专项与受控 Java 参考仍列在[待整合清单](docs/development/status.md)中。范围扫描、检查点恢复和历史 CFG/finally 实验不在本次交付范围。
 
 ## 按需使用
 
