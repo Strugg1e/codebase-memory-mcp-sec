@@ -231,6 +231,10 @@ def build_bundle(capture_raw: bytes, snapshot_raw: bytes, expected_capture: str,
         raw = files[path]
         require(checked_digest(node["sha256"]) == digest(raw), "reference_digest_mismatch")
         require(type(start) is int and type(end) is int and 0 <= start <= end <= len(raw), "reference_range")
+        # Snapshot sources are valid UTF-8. Empty slices decode successfully even
+        # inside a code point, so validate both absolute boundaries separately.
+        require(all(pos == len(raw) or (raw[pos] & 0xC0) != 0x80 for pos in (start, end)),
+                "reference_utf8_boundary")
         try:
             text = raw[start:end].decode("utf-8", "strict")
         except UnicodeError as error:
