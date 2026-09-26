@@ -5039,7 +5039,7 @@ TEST(cli_supported_agent_surfaces_match_installers) {
         "Oh My Pi (omp)",
     };
     ASSERT_EQ(sizeof(required_agents) / sizeof(required_agents[0]), 45U);
-    char *data = read_test_file_alloc("README.md");
+    char *data = read_test_file_alloc("docs/upstream/originals/README.md");
     if (!data)
         FAIL("could not read README.md for supported-agent contract");
     if (!strstr(data, "45 supported automatic/conditional client surfaces")) {
@@ -5069,7 +5069,7 @@ TEST(cli_supported_agent_surfaces_match_installers) {
     }
     free(data);
 
-    data = read_test_file_alloc("docs/index.html");
+    data = read_test_file_alloc("docs/upstream/site/index.html");
     if (!data)
         FAIL("could not read docs/index.html for supported-agent contract");
     if (!strstr(data, "configures 45 automatic/conditional client surfaces")) {
@@ -5099,7 +5099,7 @@ TEST(cli_supported_agent_surfaces_match_installers) {
     }
     free(data);
 
-    data = read_test_file_alloc("docs/llms.txt");
+    data = read_test_file_alloc("docs/upstream/site/llms.txt");
     if (!data)
         FAIL("could not read docs/llms.txt for supported-agent contract");
     if (!strstr(data, "45 automatic/conditional client surfaces") ||

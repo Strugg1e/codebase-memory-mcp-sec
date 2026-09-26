@@ -1,0 +1,118 @@
+# Manual CBM Sec preview only. No push trigger and no upstream release changes.
+name: CBM Sec 0.15 preview
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'Exact 40-character merged main commit; must match this workflow revision'
+        required: true
+        type: string
+      pr:
+        description: 'Merged integration PR number'
+        required: true
+        type: string
+      publish:
+        description: 'Publish a prerelease after package and downloaded-asset verification'
+        required: true
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+concurrency:
+  group: cbm-sec-v0.15.0-preview.1
+  cancel-in-progress: false
+env:
+  RELEASE_COMMIT: ${{ inputs.commit }}
+  RELEASE_PR: ${{ inputs.pr }}
+jobs:
+  verify-package:
+    if: github.repository == 'Strugg1e/codebase-memory-mcp-sec' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Validate the exact requested revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_PR" =~ ^[1-9][0-9]*$ ]]
+          test "$RELEASE_COMMIT" = "$GITHUB_SHA"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify candidate, merged PR and current checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/preview-logs
+          python3 security/preview_release.py preflight --commit "$RELEASE_COMMIT" --pr "$RELEASE_PR" > build/preview-logs/preflight.json
+      - name: Check product documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          make docs-check 2>&1 | tee build/preview-logs/docs.log
+      - name: Run complete security regression with Clang memory checks
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -j2 -f Makefile.security test CC=clang BUILD=build/preview-asan CFLAGS='-O1 -g' SANITIZE='-fsanitize=address,undefined -fno-omit-frame-pointer' 2>&1 | tee build/preview-logs/clang.log
+      - name: Run complete security regression with GCC
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -j2 -f Makefile.security test CC=gcc BUILD=build/preview-gcc 2>&1 | tee build/preview-logs/gcc.log
+      - name: Check retained safety and dependency integrity rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/security-audit.sh
+          bash scripts/security-vendored.sh
+      - name: Package exact source and tested programs; run bundled examples
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 security/preview_release.py package --commit "$RELEASE_COMMIT" --logs build/preview-logs --directory build/preview-dist
+          python3 security/preview_release.py verify-assets --commit "$RELEASE_COMMIT" --directory build/preview-dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cbm-sec-015-preview-${{ github.sha }}
+          path: build/preview-dist/
+          if-no-files-found: error
+          overwrite: false
+          compression-level: 0
+          retention-days: 14
+  publish-preview:
+    needs: verify-package
+    if: inputs.publish && needs.verify-package.result == 'success' && github.repository == 'Strugg1e/codebase-memory-mcp-sec' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: cbm-sec-015-preview-${{ github.sha }}
+          path: build/preview-dist
+      - name: Create draft, upload, download and verify, then publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RELEASE_COMMIT" = "$GITHUB_SHA"
+          python3 security/preview_release.py publish --commit "$RELEASE_COMMIT" --pr "$RELEASE_PR" --directory build/preview-dist

@@ -9,6 +9,7 @@
 | 理解双循环中的职责 | [产品与架构](architecture.md) |
 | 修改代码、定位目录 | [仓库结构](development/repository-layout.md)、[贡献指南](../CONTRIBUTING.md) |
 | 核对验证和版本 | [测试方式](development/testing.md)、[交付状态](development/status.md) |
+| 准备独立预览发布 | [0.15 发布流程](development/preview-release.md) |
 | 核对上游来源 | [上游归档](upstream/README.md) |
 
 ## 按主题查询
@@ -20,6 +21,7 @@
 | Java 程序关系 | [操作上下文](reference/operations.md)、[显式多跳](reference/argument-flow.md)、[局部值流](reference/local-flow.md) |
 | 返回值 | [辅助方法摘要](reference/return-summaries.md)、[String 模型](reference/string-models.md) |
 | 数据访问和安全配置 | [MyBatis 模板](reference/mybatis-templates.md)、[Spring Security](reference/entry-security.md) |
+| 离线证据交接 | [完整结果保存、导出与复核](reference/evidence-handoff.md) |
 | 自动回溯 | [源到危险参数](reference/source-sink.md) |
 | 历史设计和发布 | [早期职责说明](reference/product-boundaries.md)、[v0.6 预览说明](reference/preview-v0.6.md) |
 
