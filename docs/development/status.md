@@ -1,5 +1,13 @@
 # 交付状态与版本口径
 
+## 2026-09-27 普通实参独立验收配套
+
+在 `fd48f8a7...` 基线之上，独立增加 `security/demo_arguments.py`、`tests/security/test_argument_origins.py` 和 `tests/java-argument-reference/`。补齐普通参数查询的可运行示例、输入与关系反例、有限 Java 样例对照，不修改分析求解、MCP 接口或发布门禁。
+
+普通回放只运行可信分析器；Java 对照是明确的单独命令，只运行仓库固定样例。两者均不运行任意被审计项目。相同文件名不证明原始候选身份；下方的“原始文件未同步”保留其历史含义，独立新增测试与原包历史数量不能混用。DCO、原始候选核验及最终 CI 仍须各自满足；本页不宣称已合并或发布。
+
+调用和验收范围见[普通实参查询](../reference/argument-origins.md)及[受控 Java 对照](../../tests/java-argument-reference/README.md)。
+
 ## 2026-09-26 独立证据交接实现
 
 在已核验整合分支 `0c0bca15...` 基础上，按用户批准的产品完善计划独立增加 `security/export_evidence.py`、`security/demo_evidence.py` 与 `tests/security/test_evidence_bundle.py`。保存真实请求、程序身份和完整操作结果，核对源码引用并支持另一进程复核；不改变关系求解、不自动汇总安全判断。

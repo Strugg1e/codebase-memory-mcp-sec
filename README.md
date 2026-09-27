@@ -33,9 +33,10 @@ build/security/cbm-security-facts --capabilities
 python3 security/demo_context.py --mcp build/security/cbm-security-mcp
 python3 security/demo_trace.py --mcp build/security/cbm-security-mcp
 python3 security/demo_flow.py --mcp build/security/cbm-security-mcp
+python3 security/demo_arguments.py --mcp build/security/cbm-security-mcp
 ```
 
-示例使用受控源码，只运行分析器，不执行被审计项目。上面的既有回放不替代尚未同步的普通实参、资源与导出专项。检查未完成或失败时，不应合并或发布当前分支。
+示例使用受控源码，只运行分析器，不执行被审计项目。普通实参回放和专项已独立补齐，受控 Java 对照另行运行；这些新增文件不等于原始候选身份恢复，也不替代原包中尚未核验的完整测试集。检查未完成或失败时，不应合并或发布当前分支。
 
 `make`、`make test`、`make docs-check` 和 `make help` 使用安全产品入口。两个程序是 `cbm-security-facts` 和 `cbm-security-mcp`。快照准备见[快速开始](docs/getting-started.md)。不要运行原版 `install.sh` 安装本工具，也不要把上游 npm/PyPI 包当作 CBM Sec。
 

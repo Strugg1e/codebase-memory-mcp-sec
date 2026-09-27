@@ -1,6 +1,6 @@
 # 普通 Java 实参来源查询
 
-接口：`cbm.argument-origins.v1`；当前分支程序：`0.15.0-preview.1`。核心查询已进入整合分支，原始候选的专项、回放及 Java 参考尚未同步，见[交付状态](../development/status.md)。这不是已完成发布或完整验证声明。
+接口：`cbm.argument-origins.v1`；当前分支程序：`0.15.0-preview.1`。核心查询已进入整合分支，普通实参专项、回放及有限 Java 参考已独立编写；原始候选仍未恢复，见[交付状态](../development/status.md)。这不是已完成发布或完整验证声明。
 
 本查询只处理程序关系，复用既有反向搜索、声明调用核对和局部值流。不依赖请求注解，不判断可信身份或最终漏洞。
 
@@ -59,8 +59,16 @@ trace_source_to_sink 保留原接口、源识别和 schema，共享搜索内核�
 
 资源清单不自动执行本查询。搜索内部操作缓存只限本次请求，不是 inspect_operation_context 的最后一条完整结果缓存。get_snapshot_info.argument_origin_tracing 单独记录请求和解析尝试。
 
-## 尚待恢复的专项验证
+## 可运行的独立验证
 
-原候选计划运行 `tests/security/test_argument_origins.py`、`security/demo_arguments.py` 和 `tests/java-argument-reference/compare.py`。这些文件及其参考 README 尚未同步，不能在当前分支照抄命令运行，也不能以既有 MyBatis 回溯测试替代它们。
+```sh
+python3 tests/security/test_argument_origins.py build/security/cbm-security-facts
+python3 security/demo_arguments.py --mcp build/security/cbm-security-mcp
+python3 tests/java-argument-reference/compare.py --mcp build/security/cbm-security-mcp
+```
 
-恢复后应使用真实解析器/MCP 验证普通形参、换位、覆盖、类型冲突、歧义和停止原因；Java 对照只编译执行工具仓库自带的受控样例，不运行任意被审计项目。历史验证记录不作为最终提交的新验证结果。
+普通专项使用真实解析器和 MCP，覆盖普通形参、换位、复制与覆盖、分支、未知返回、目标类型、重载歧义、身份、文件和深度预算，以及错误请求后的继续使用。回放从真实事实清单取得调用编号，在四个无 Mapper、无请求注解的受控场景中检查结果及全部源码引用，不执行 Java。
+
+[Java 参考说明](../../tests/java-argument-reference/README.md)单独编译运行仓库固定样例。四个场景各五次求值，只对有限输入观察进行核对；不能据此认定所有路径或漏洞结论。普通专项不会偷偷启动 Java 或安装依赖。
+
+以上是独立开发的产品验收，不冒充原始候选的同名文件、历史专项或 Java 参考恢复。原候选取得后仍须逐文件比较；历史验证记录不能替代最终提交的新验证。查询结果并非单操作离线证据包，不能丢弃完整 trace 的范围、frontiers 和预算说明后只导出一段路径。
