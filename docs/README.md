@@ -23,6 +23,7 @@
 | 数据访问和安全配置 | [MyBatis 模板](reference/mybatis-templates.md)、[Spring Security](reference/entry-security.md) |
 | 资源清单与缓存 | [分页、身份及离线交接验收](reference/resource-operations.md) |
 | 离线证据交接 | [完整结果保存、导出与复核](reference/evidence-handoff.md) |
+| 宿主接入回放 | [完整消息、预览、失败与过期结果](reference/consumer-replay.md) |
 | 自动回溯 | [源到危险参数](reference/source-sink.md) |
 | 历史设计和发布 | [早期职责说明](reference/product-boundaries.md)、[v0.6 预览说明](reference/preview-v0.6.md) |
 
