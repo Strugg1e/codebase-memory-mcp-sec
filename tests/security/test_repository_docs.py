@@ -18,7 +18,7 @@ class RepositoryDocsTests(unittest.TestCase):
         result = checker.validate()
         self.assertTrue(result["passed"], result["errors"])
         self.assertGreater(result["local_link_targets_checked"], 30)
-        self.assertEqual(result["mcp_tools_checked"], 10)
+        self.assertEqual(result["mcp_tools_checked"], 12)
 
     def test_make_help_does_not_build_or_install(self):
         p = subprocess.run(["make", "--no-print-directory", "help"], cwd=ROOT,

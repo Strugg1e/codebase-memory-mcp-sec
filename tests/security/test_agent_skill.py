@@ -21,13 +21,13 @@ class SkillTests(unittest.TestCase):
     def enabled(self):return {'CBM_SEC_CONTEXT_ENABLED':'1','CBM_SEC_SNAPSHOT_ID':'a'*64}
     def test_skill_metadata(self):
         s=SKILL.read_text();self.assertTrue(s.startswith('---\nname: cbm-sec-evidence\ndescription:'))
-        self.assertLess(len(s.encode()),10000);self.assertIn('version: "0.14.0"',s)
+        self.assertLess(len(s.encode()),10000);self.assertIn('version: "0.15.0"',s)
     def test_references_are_packaged(self):
         for name in ['entry-points.md','interpretation.md','data-access.md','security-controls.md']:self.assertTrue((SKILL.parent/'references'/name).is_file())
     def test_skill_tool_names_exist(self):
         s=harness.Session(self);self.addCleanup(s.close)
         tools={t['name'] for t in s.rpc('tools/list',{})['tools']}
-        for name in ['get_snapshot_info','query_entry_points','query_security_facts','inspect_operation_context','resolve_code_location','inspect_entry_security']:self.assertIn(name,tools)
+        for name in ['get_snapshot_info','query_entry_points','query_security_facts','inspect_operation_context','resolve_code_location','inspect_entry_security','query_resource_operations','trace_argument_origins']:self.assertIn(name,tools)
     def test_skill_preserves_incomplete_semantics(self):
         s=SKILL.read_text();self.assertIn('零候选、不支持、超预算、解析失败、反证成立',s);self.assertIn('handler',s)
     def test_hook_disabled_by_default(self):self.assertEqual(self.run_hook({'hook_event_name':'SessionStart','source':'startup'}),b'')

@@ -2,6 +2,8 @@
 #define CBM_SECURITY_AUTO_TRACE_H
 #include "operation.h"
 
+#define SF_ARGUMENT_TRACE_SCHEMA "cbm.argument-origins.v1"
+
 #define SF_TRACE_SCHEMA "cbm.source-sink-paths.v1"
 #define SF_TRACE_RULE "spring-mybatis-text-substitution"
 #define SF_TRACE_FILES 16U
@@ -23,4 +25,9 @@ typedef struct {
  * executes target code, or treats incomplete exploration as absence of risk. */
 const char *sf_trace_source_to_sink(const sf_trace_request *request,
                                   yyjson_mut_doc *output, yyjson_mut_val **result);
+/* Ordinary argument query. No mapper, rule, framework input or sink is required.
+ * Reuses the same caller search and local evaluator. Formal leaves are scope
+ * boundaries, not trusted/untrusted input classifications. */
+const char *sf_trace_argument_origins(const sf_trace_request *request, size_t argument_index,
+                                      yyjson_mut_doc *output, yyjson_mut_val **result);
 #endif

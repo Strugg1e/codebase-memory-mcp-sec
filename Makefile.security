@@ -13,7 +13,7 @@ SEC_FLAGS = -std=c11 -D_DEFAULT_SOURCE -D_GNU_SOURCE -Wall -Wextra -Werror $(CFL
 GRAMMARS = java python javascript typescript tsx go xml
 CORE = security/capabilities.c security/facts.c security/query.c src/foundation/sha256.c src/foundation/secure_random.c
 SOURCES = security/main.c security/parser.c security/models.c security/java_models.c
-HEADERS = security/java_string_models.h security/auto_trace.h security/entry_security.h security/mybatis_template.h security/entry_points.h security/java_models.h security/agent_views.h security/capabilities.h security/facts.h security/parser.h security/operation.h security/flow.h security/local_flow.h src/foundation/sha256.h src/foundation/secure_random.h
+HEADERS = security/resource_operations.h security/java_string_models.h security/auto_trace.h security/entry_security.h security/mybatis_template.h security/entry_points.h security/java_models.h security/agent_views.h security/capabilities.h security/facts.h security/parser.h security/operation.h security/flow.h security/local_flow.h src/foundation/sha256.h src/foundation/secure_random.h
 VENDOR_ROOTS = internal/cbm/vendored/ts_runtime internal/cbm/vendored/common $(addprefix internal/cbm/vendored/grammars/,$(GRAMMARS))
 VENDOR_DEPS = $(shell find $(VENDOR_ROOTS) -type f)
 OBJECTS = $(BUILD)/runtime.o $(addprefix $(BUILD)/grammar-,$(addsuffix .o,$(GRAMMARS)))
@@ -52,8 +52,8 @@ $(BUILD)/yyjson.o: vendored/yyjson/yyjson.c vendored/yyjson/yyjson.h $(BUILD)/fl
 $(BUILD)/cbm-security-facts: $(SOURCES) $(CORE) $(HEADERS) $(BUILD)/identity.h $(BUILD)/flags $(OBJECTS)
 	$(CC) $(CPPFLAGS) $(SEC_FLAGS) -include $(BUILD)/identity.h $(SOURCES) $(CORE) $(OBJECTS) $(LDLIBS) -o $@
 
-$(BUILD)/cbm-security-mcp: security/mcp.c security/auto_trace.c security/entry_security.c security/entry_points.c security/agent_views.c security/operation.c security/mybatis_template.c security/flow.c security/local_flow.c security/java_string_models.c security/parser.c security/models.c security/java_models.c $(CORE) $(HEADERS) vendored/yyjson/yyjson.h $(BUILD)/identity.h $(BUILD)/flags $(OBJECTS) $(BUILD)/yyjson.o
-	$(CC) $(CPPFLAGS) $(SEC_FLAGS) -include $(BUILD)/identity.h security/mcp.c security/auto_trace.c security/entry_security.c security/entry_points.c security/agent_views.c security/operation.c security/mybatis_template.c security/flow.c security/local_flow.c security/java_string_models.c security/parser.c security/models.c security/java_models.c $(CORE) $(OBJECTS) $(BUILD)/yyjson.o $(LDLIBS) -o $@
+$(BUILD)/cbm-security-mcp: security/mcp.c security/resource_operations.c security/auto_trace.c security/entry_security.c security/entry_points.c security/agent_views.c security/operation.c security/mybatis_template.c security/flow.c security/local_flow.c security/java_string_models.c security/parser.c security/models.c security/java_models.c $(CORE) $(HEADERS) vendored/yyjson/yyjson.h $(BUILD)/identity.h $(BUILD)/flags $(OBJECTS) $(BUILD)/yyjson.o
+	$(CC) $(CPPFLAGS) $(SEC_FLAGS) -include $(BUILD)/identity.h security/mcp.c security/resource_operations.c security/auto_trace.c security/entry_security.c security/entry_points.c security/agent_views.c security/operation.c security/mybatis_template.c security/flow.c security/local_flow.c security/java_string_models.c security/parser.c security/models.c security/java_models.c $(CORE) $(OBJECTS) $(BUILD)/yyjson.o $(LDLIBS) -o $@
 
 $(BUILD)/test-core: tests/security/test_core.c $(CORE) $(HEADERS) $(BUILD)/flags
 	$(CC) $(CPPFLAGS) $(SEC_FLAGS) tests/security/test_core.c $(CORE) $(LDLIBS) -o $@

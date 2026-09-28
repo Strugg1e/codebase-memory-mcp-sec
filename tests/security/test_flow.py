@@ -208,10 +208,27 @@ class FlowTests(unittest.TestCase):
 
     def test_repeated_queries_keep_identity_and_facts(self):
         s = self.session()
+        before = s.call("get_snapshot_info")["operation_context"]
         first = self.inspect(s)
+        after_first = s.call("get_snapshot_info")["operation_context"]
         second = self.inspect(s)
+        after_second = s.call("get_snapshot_info")["operation_context"]
         self.assertEqual(first, second)
-        self.assertEqual(s.call("get_snapshot_info")["operation_context"]["parse_attempts"], 22)
+        self.assertEqual(after_first["requests"], before["requests"] + 1)
+        self.assertEqual(after_first["computations"], before["computations"] + 1)
+        self.assertGreater(after_first["parse_attempts"], before["parse_attempts"])
+        self.assertEqual(after_first["cache_hits"], before["cache_hits"])
+        self.assertTrue(after_first["cached"])
+        self.assertEqual(after_first["cache_capacity"], 1)
+        self.assertGreater(after_first["cached_bytes"], 0)
+        # 重复请求复用完整结果；不再要求深层解析次数翻倍。
+        self.assertEqual(after_second["requests"], after_first["requests"] + 1)
+        self.assertEqual(after_second["computations"], after_first["computations"])
+        self.assertEqual(after_second["parse_attempts"], after_first["parse_attempts"])
+        self.assertEqual(after_second["cache_hits"], after_first["cache_hits"] + 1)
+        self.assertEqual(after_second["cache_evictions"], after_first["cache_evictions"])
+        self.assertEqual(after_second["cached_bytes"], after_first["cached_bytes"])
+        self.assertTrue(after_second["cached"])
 
     def test_upstream_change_changes_context_identity(self):
         s = self.session()
@@ -222,7 +239,13 @@ class FlowTests(unittest.TestCase):
     def test_schema_advertises_the_same_bound_as_validation(self):
         s = self.session()
         tools = s.rpc("tools/list", {})["tools"]
-        self.assertEqual(len(tools), 10)
+        self.assertEqual(len(tools), 12)
+        self.assertEqual({tool["name"] for tool in tools}, {
+            "get_snapshot_info", "list_snapshot_files", "query_security_facts",
+            "get_security_evidence", "read_snapshot_source", "resolve_code_location",
+            "query_entry_points", "inspect_operation_context", "inspect_entry_security",
+            "trace_source_to_sink", "query_resource_operations", "trace_argument_origins",
+        })
         schema = next(t for t in tools if t["name"] == "inspect_operation_context")["inputSchema"]["properties"]["upstream_calls"]
         self.assertEqual(schema["type"], "array")
         self.assertEqual(schema["maxItems"], 4)

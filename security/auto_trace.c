@@ -1,5 +1,5 @@
-/* Automatic backward exploration for one explicit MyBatis call. The explorer
- * consumes existing local relations; it is not a second value-flow evaluator. */
+/* Shared bounded backward explorer for selected arguments and MyBatis seeds.
+ * The two entry points reuse local relations and declared-call validation. */
 #include "auto_trace.h"
 #include "entry_points.h"
 #include "flow.h"
@@ -51,7 +51,8 @@ typedef struct {
     state queue[SF_TRACE_STATES];
     size_t nfiles, ncalls, nlinks, nstates, processed, context_count, context_bytes;
     size_t parses, context_hits, edge_hits, budget_stops;
-    bool truncated, file_gaps;
+    bool truncated, file_gaps, argument_mode;
+    size_t selected_argument;
     const char *error;
     clock_t start;
 } engine;
@@ -277,13 +278,40 @@ static bool scalar_input(engine *e,size_t call,yyjson_val *input) {
     written=snprintf(qualified,sizeof(qualified),"%s%s%s",f->package,*f->package?".":"",s);
     return written>=0 && (size_t)written<sizeof(qualified) && owner_count(e,qualified)==0;
 }
+static V *path_steps(engine *e,size_t state_id,size_t formal,V *unknowns,bool *literal) {
+    V *steps=arr(e);
+    size_t order[SF_FLOW_HOPS+1],count=0,current=state_id;
+    while(current!=NO_INDEX && count<SF_FLOW_HOPS+1){order[count++]=current;current=e->queue[current].parent;}
+    for(size_t i=count;i>0;i--) {
+        state *part=&e->queue[order[i-1]];V *step=obj(e);call_info *call=&e->calls[part->call];
+        if(call->context_index!=NO_INDEX)num(e,step,"context_index",call->context_index);
+        num(e,step,"argument_index",part->argument);
+        put(e,step,"anchor",anchor(e,part->call));
+        size_t param=i>1?e->queue[order[i-2]].parent_formal:formal;if(param!=NO_INDEX)num(e,step,"formal_parameter_index",param);
+        if(part->edge!=NO_INDEX)num(e,step,"incoming_edge_index",part->edge);
+        /* Reporting an unfinished frontier must not perform new analysis. */
+        V *local=e->argument_mode ? get(indexed(get(call->context,"arguments"),part->argument),"local_value_flow") :
+            get(argument(e,part->call,part->argument),"local_value_flow");
+        *literal|=yyjson_mut_get_bool(get(local,"literal_possible"));
+        size_t j,n;V *v;yyjson_mut_arr_foreach(get(local,"unknown_reasons"),j,n,v){const char *name=yyjson_mut_get_str(v);if(name)unique(e,unknowns,name);}
+        put(e,step,"local_relation",copy(e,local));add(e,steps,step);
+    }
+    return steps;
+}
 static void termination(engine *e,size_t state_id,const char *reason,size_t formal) {
-    V *r=obj(e);num(e,r,"state_index",state_id);num(e,r,"sink_index",e->queue[state_id].sink);
+    V *r=obj(e);num(e,r,"state_index",state_id);if(!e->argument_mode)num(e,r,"sink_index",e->queue[state_id].sink);
     size_t context_id=e->calls[e->queue[state_id].call].context_index;
     if(context_id!=NO_INDEX)num(e,r,"context_index",context_id);
     put(e,r,"anchor",anchor(e,e->queue[state_id].call));
     num(e,r,"argument_index",e->queue[state_id].argument);text(e,r,"reason",reason);
     if(formal!=NO_INDEX)num(e,r,"formal_parameter_index",formal);
+    if(e->argument_mode) {
+        V *unknowns=arr(e);bool literal=false;
+        put(e,r,"steps",path_steps(e,state_id,formal,unknowns,&literal));
+        text(e,r,"steps_order","argument_to_origin");put(e,r,"unknown_reasons",unknowns);
+        flag(e,r,"literal_alternative_possible",literal);
+        text(e,r,"interpretation","stopped_query_not_a_security_conclusion");
+    }
     add(e,e->frontiers,r);
 }
 static bool cycle(engine *e,const state *s,size_t call) {
@@ -300,24 +328,42 @@ static void emit_path(engine *e,size_t state_id,size_t formal,yyjson_val *entry,
     put(e,source_value,"entry",yyjson_val_mut_copy(e->json,entry));
     put(e,source_value,"parameter",yyjson_val_mut_copy(e->json,input));num(e,source_value,"formal_parameter_index",formal);
     text(e,source_value,"model","spring-mvc-explicit-scalar-input.v1");put(e,r,"source",source_value);
-    size_t order[SF_FLOW_HOPS+1],count=0,current=state_id;
-    while(current!=NO_INDEX && count<SF_FLOW_HOPS+1){order[count++]=current;current=e->queue[current].parent;}
     bool literal=false;
-    for(size_t i=count;i>0;i--) {
-        state *part=&e->queue[order[i-1]];V *step=obj(e);call_info *call=&e->calls[part->call];
-        num(e,step,"context_index",call->context_index);num(e,step,"argument_index",part->argument);
-        put(e,step,"anchor",anchor(e,part->call));
-        size_t param=i>1?e->queue[order[i-2]].parent_formal:formal;num(e,step,"formal_parameter_index",param);
-        if(part->edge!=NO_INDEX)num(e,step,"incoming_edge_index",part->edge);
-        V *local=get(argument(e,part->call,part->argument),"local_value_flow");
-        literal|=yyjson_mut_get_bool(get(local,"literal_possible"));
-        size_t j,n;V *v;yyjson_mut_arr_foreach(get(local,"unknown_reasons"),j,n,v){const char *name=yyjson_mut_get_str(v);if(name)unique(e,unknowns,name);}
-        put(e,step,"local_relation",copy(e,local));add(e,steps,step);
-    }
+    steps=path_steps(e,state_id,formal,unknowns,&literal);
     put(e,r,"steps",steps);text(e,r,"steps_order","sink_to_source");put(e,r,"unknown_reasons",unknowns);
     flag(e,r,"literal_alternative_possible",literal);text(e,r,"status",yyjson_mut_arr_size(unknowns)?"candidate_with_unknowns":"candidate_in_supported_subset");
     char id[65];size_t bytes=0;char *raw=yyjson_mut_val_write(r,0,&bytes);
     if(!raw){e->error="out_of_memory";return;}cbm_sha256_hex(raw,bytes,id);free(raw);text(e,r,"path_id",id);add(e,e->paths,r);
+}
+/* A formal boundary is a useful local result even when callers are absent or
+ * unresolved. Its stopping reason remains visible; it is never an HTTP source. */
+static void emit_formal_boundary(engine *e,size_t state_id,size_t formal,
+                                 const char *reason,bool derived) {
+    if(yyjson_mut_arr_size(e->paths)>=e->request->max_paths) {
+        limit(e,"trace_path_limit");termination(e,state_id,"trace_path_limit",formal);return;
+    }
+    state *s=&e->queue[state_id];V *r=obj(e),*source=obj(e),*unknowns=arr(e);
+    bool literal=false;
+    num(e,r,"candidate_hops",s->depth);
+    text(e,r,"relation",derived?"may_depend_after_transformation":"may_preserve_value");
+    text(e,r,"boundary_reason",reason);text(e,r,"runtime_dispatch","not_verified");
+    text(e,r,"path_feasibility","not_evaluated");
+    V *ctx=context(e,s->call,false);
+    V *parameter=indexed(get(get(ctx,"java_context"),"parameters"),formal);
+    text(e,source,"kind","formal_parameter_boundary");
+    num(e,source,"formal_parameter_index",formal);
+    num(e,source,"context_index",e->calls[s->call].context_index);
+    put(e,source,"parameter",copy(e,parameter));
+    text(e,source,"trust","not_classified");
+    text(e,source,"value_scope","local_value_or_reference_not_heap_contents");
+    put(e,r,"source",source);
+    put(e,r,"steps",path_steps(e,state_id,formal,unknowns,&literal));
+    text(e,r,"steps_order","argument_to_origin");put(e,r,"unknown_reasons",unknowns);
+    flag(e,r,"literal_alternative_possible",literal);
+    text(e,r,"status",yyjson_mut_arr_size(unknowns)?"relation_with_unknowns":"relation_in_supported_subset");
+    char id[65];size_t bytes=0;char *raw=yyjson_mut_val_write(r,0,&bytes);
+    if(!raw){e->error="out_of_memory";return;}
+    cbm_sha256_hex(raw,bytes,id);free(raw);text(e,r,"path_id",id);add(e,e->paths,r);
 }
 static bool lexical_name(engine *e,size_t down,size_t up) {
     call_info *a=&e->calls[down],*b=&e->calls[up];char target[256],name[256];
@@ -347,19 +393,28 @@ static void explore(engine *e,size_t state_id) {
     V *local=get(indexed(get(ctx,"arguments"),s.argument),"local_value_flow");
     if(!local){termination(e,state_id,"argument_relation_not_available",NO_INDEX);return;}
     size_t i,n;V *formal_value;
+    if(e->argument_mode) {
+        if(yyjson_mut_get_bool(get(ctx,"truncated")))limit(e,"operation_analysis_incomplete");
+        if(yyjson_mut_arr_size(get(local,"unknown_reasons")))
+            unique(e,e->gaps,"argument_origin_has_unknown_parts");
+    }
     V *indices=get(local,"formal_parameter_indices");
     if(!yyjson_mut_arr_size(indices)){termination(e,state_id,yyjson_mut_arr_size(get(local,"unknown_reasons"))?"unknown_value_origin":"no_known_formal_dependencies_remain",NO_INDEX);return;}
     yyjson_mut_arr_foreach(indices,i,n,formal_value) {
         if(!yyjson_mut_is_uint(formal_value)||yyjson_mut_get_uint(formal_value)>=64){termination(e,state_id,"formal_parameter_index_not_supported",NO_INDEX);continue;}
         size_t formal=(size_t)yyjson_mut_get_uint(formal_value);
         bool derived=s.derived || has_index(get(local,"derived_parameter_indices"),formal);
-        yyjson_val *input=NULL,*entry=source_entry(e,s.call,formal,&input);
+        yyjson_val *input=NULL,*entry=e->argument_mode?NULL:source_entry(e,s.call,formal,&input);
         if(entry) {
             if(scalar_input(e,s.call,input))emit_path(e,state_id,formal,entry,input,derived);
             else termination(e,state_id,"request_object_contents_not_modeled",formal);
             continue;
         }
-        if(s.depth>=e->request->max_hops){limit(e,"trace_depth_limit");termination(e,state_id,"trace_depth_limit",formal);continue;}
+        if(s.depth>=e->request->max_hops){
+            limit(e,"trace_depth_limit");termination(e,state_id,"trace_depth_limit",formal);
+            if(e->argument_mode)emit_formal_boundary(e,state_id,formal,"trace_depth_limit",derived);
+            continue;
+        }
         size_t accepted=0,lexical=0;
         for(size_t up=0;up<e->ncalls&&!e->error;up++) {
             if(!lexical_name(e,s.call,up))continue;
@@ -372,14 +427,20 @@ static void explore(engine *e,size_t state_id) {
             e->queue[e->nstates++]=(state){.call=up,.argument=formal,.sink=s.sink,.depth=s.depth+1,
                 .parent=state_id,.parent_formal=formal,.edge=edge,.derived=derived};
         }
-        if(!accepted)termination(e,state_id,lexical?"caller_targets_unresolved_in_selected_scope":"no_candidate_callers_in_selected_scope",formal);
+        if(!accepted) {
+            const char *reason=lexical?"caller_targets_unresolved_in_selected_scope":"no_candidate_callers_in_selected_scope";
+            termination(e,state_id,reason,formal);
+            if(e->argument_mode)emit_formal_boundary(e,state_id,formal,reason,derived);
+        }
     }
 }
 static int source_order(const void *a,const void *b) {return strcmp(((const sf_operation_source *)a)->path,((const sf_operation_source *)b)->path);}
-static const char *validate(const sf_trace_request *r) {
-    if(!r || !r->operation.caller || !r->operation.call || !r->operation.mapper || !r->scope ||
+static const char *validate(const sf_trace_request *r,bool argument_mode) {
+    if(!r || !r->operation.caller || !r->operation.call || (!argument_mode && !r->operation.mapper) || !r->scope ||
        !r->scope_count || r->scope_count>SF_TRACE_FILES || r->max_hops>SF_FLOW_HOPS ||
        !r->max_paths || r->max_paths>SF_TRACE_PATHS || !r->max_checks || r->max_checks>SF_TRACE_CHECKS)return "invalid_trace_arguments";
+    if(argument_mode && (r->operation.mapper || r->operation.xml || r->operation.annotation_sql))
+        return "argument_trace_does_not_accept_mapping";
     size_t bytes=0;bool root=false;
     for(size_t i=0;i<r->scope_count;i++) {
         const sf_operation_source *s=&r->scope[i];
@@ -388,9 +449,9 @@ static const char *validate(const sf_trace_request *r) {
         bytes+=s->size;root|=eq(s->path,r->operation.caller->path);
         if(i && strcmp(r->scope[i-1].path,s->path)>=0)return "trace_scope_not_unique_and_sorted";
     }
-    return root?NULL:"trace_scope_must_include_sink_file";
+    return root?NULL:(argument_mode?"trace_scope_must_include_call_file":"trace_scope_must_include_sink_file");
 }
-const char *sf_trace_source_to_sink(const sf_trace_request *input,yyjson_mut_doc *output,V **result) {
+static const char *trace_query(const sf_trace_request *input,bool argument_mode,size_t argument_index,yyjson_mut_doc *output,V **result) {
     if(!result || !output || !input)return "invalid_trace_arguments";
     *result=NULL;
     sf_trace_request request=*input;sf_operation_source sorted[SF_TRACE_FILES];
@@ -398,28 +459,44 @@ const char *sf_trace_source_to_sink(const sf_trace_request *input,yyjson_mut_doc
     memcpy(sorted,request.scope,request.scope_count*sizeof(*sorted));
     for(size_t i=0;i<request.scope_count;i++)if(!sorted[i].path)return "invalid_trace_scope";
     qsort(sorted,request.scope_count,sizeof(*sorted),source_order);request.scope=sorted;
-    const char *error=validate(&request);if(error)return error;
+    const char *error=validate(&request,argument_mode);if(error)return error;
+    if(argument_mode && argument_index>=64)return "argument_index_out_of_range";
     engine *e=calloc(1,sizeof(*e));if(!e)return "out_of_memory";
     e->request=&request;e->json=output;e->start=clock();
+    e->argument_mode=argument_mode;e->selected_argument=argument_index;
     if(e->start==(clock_t)-1){free(e);return "clock_unavailable";}
     e->result=obj(e);e->contexts=arr(e);e->paths=arr(e);e->frontiers=arr(e);e->edges=arr(e);e->coverage=arr(e);e->gaps=arr(e);
-    text(e,e->result,"schema",SF_TRACE_SCHEMA);text(e,e->result,"rule_id",SF_TRACE_RULE);text(e,e->result,"rule_revision","1");
-    text(e,e->result,"snapshot_id",request.operation.snapshot_id);text(e,e->result,"direction","backward_from_selected_sink_call");
+    text(e,e->result,"schema",argument_mode?SF_ARGUMENT_TRACE_SCHEMA:SF_TRACE_SCHEMA);
+    if(!argument_mode){text(e,e->result,"rule_id",SF_TRACE_RULE);text(e,e->result,"rule_revision","1");}
+    text(e,e->result,"snapshot_id",request.operation.snapshot_id);
+    text(e,e->result,"direction",argument_mode?"backward_from_selected_argument":"backward_from_selected_sink_call");
     put(e,e->result,"contexts",e->contexts);put(e,e->result,"paths",e->paths);put(e,e->result,"frontiers",e->frontiers);
     put(e,e->result,"call_candidates",e->edges);put(e,e->result,"coverage",e->coverage);put(e,e->result,"gaps",e->gaps);
     text(e,e->result,"security_verdict","not_evaluated");text(e,e->result,"sanitizer_effects","not_modeled");
     text(e,e->result,"absence_semantics","no_negative_security_conclusion");
     text(e,e->result,"scope_semantics","explicit_file_set_not_complete_application");
-    text(e,e->result,"source_semantics","declaration_candidate_not_runtime_registration_proof");
+    text(e,e->result,"source_semantics",argument_mode?"formal_boundaries_not_external_input_classification":"declaration_candidate_not_runtime_registration_proof");
     text(e,e->result,"source_trust","untrusted_data_not_instructions");
     size_t root=NO_INDEX;error=load_files(e,&root);if(error)goto done;
     if(!eq(e->files[e->calls[root].file].doc.analysis_id,request.operation.caller->analysis_id)){error="analysis_mismatch";goto done;}
     V *root_context=context(e,root,true);if(!root_context){error=e->calls[root].failure?e->calls[root].failure:e->error;goto done;}
-    num(e,e->result,"root_context_index",e->calls[root].context_index);put(e,e->result,"sink_call",anchor(e,root));
+    num(e,e->result,"root_context_index",e->calls[root].context_index);
+    put(e,e->result,argument_mode?"selected_call":"sink_call",anchor(e,root));
     V *mapping=get(root_context,"mybatis"),*template=get(mapping,"template_analysis");
-    V *markers=get(template,"parameter_occurrences"),*sinks=arr(e);put(e,e->result,"sinks",sinks);
+    V *markers=get(template,"parameter_occurrences"),*sinks=arr(e);
+    if(!argument_mode)put(e,e->result,"sinks",sinks);
     bool sink_incomplete=!template || yyjson_mut_get_bool(get(template,"input_incomplete")) ||
         yyjson_mut_get_bool(get(template,"truncated"));
+    if(argument_mode) {
+        V *selected=indexed(get(root_context,"arguments"),argument_index);
+        if(!selected){error="argument_index_out_of_range";goto done;}
+        num(e,e->result,"argument_index",argument_index);
+        put(e,e->result,"selected_argument",copy(e,selected));
+        text(e,e->result,"selected_call_target","not_required_for_argument_value_query");
+        if(yyjson_mut_get_bool(get(root_context,"truncated")))limit(e,"root_analysis_incomplete");
+        e->queue[e->nstates++]=(state){.call=root,.argument=argument_index,.sink=NO_INDEX,.parent=NO_INDEX,.edge=NO_INDEX};
+        goto search;
+    }
     if(sink_incomplete)unique(e,e->gaps,"sink_analysis_incomplete");
     if(!mapping_ready(mapping)){unique(e,e->gaps,"sink_mapping_not_resolved");goto finish;}
     if(yyjson_mut_get_bool(get(template,"truncated"))||yyjson_mut_get_bool(get(root_context,"truncated")))limit(e,"root_analysis_incomplete");
@@ -433,6 +510,7 @@ const char *sf_trace_source_to_sink(const sf_trace_request *input,yyjson_mut_doc
         text(e,record,"trace_status","scheduled");
         e->queue[e->nstates++]=(state){.call=root,.argument=(size_t)yyjson_mut_get_uint(index),.sink=sink,.parent=NO_INDEX,.edge=NO_INDEX};
     }
+search:
     for(;e->processed<e->nstates && !e->error;e->processed++) {
         if(!time_left(e))break;
         if(yyjson_mut_arr_size(e->paths)>=request.max_paths){limit(e,"trace_path_limit");break;}
@@ -440,7 +518,8 @@ const char *sf_trace_source_to_sink(const sf_trace_request *input,yyjson_mut_doc
     }
     for(size_t i=e->processed;i<e->nstates;i++)termination(e,i,"queued_state_not_evaluated_due_to_budget",NO_INDEX);
 finish:
-    text(e,e->result,"status",yyjson_mut_arr_size(e->paths)?"candidate_paths_found":
+    if(argument_mode)text(e,e->result,"status",yyjson_mut_arr_size(e->paths)?"formal_origin_relations_found":"no_formal_origin_path_in_analyzed_subset");
+    else text(e,e->result,"status",yyjson_mut_arr_size(e->paths)?"candidate_paths_found":
          !mapping_ready(mapping)?"sink_mapping_unresolved":
          !yyjson_mut_arr_size(sinks)?(sink_incomplete?"sink_analysis_incomplete":"no_matching_sink_in_selected_mapping"):"no_candidate_path_in_analyzed_subset");
     flag(e,e->result,"truncated",e->truncated);flag(e,e->result,"file_analysis_gaps",e->file_gaps);
@@ -448,7 +527,7 @@ finish:
     V *states=arr(e);
     for(size_t i=0;i<e->nstates;i++) {
         state *s=&e->queue[i];V *v=obj(e);num(e,v,"index",i);put(e,v,"anchor",anchor(e,s->call));
-        num(e,v,"argument_index",s->argument);num(e,v,"sink_index",s->sink);num(e,v,"depth",s->depth);
+        num(e,v,"argument_index",s->argument);if(!argument_mode)num(e,v,"sink_index",s->sink);num(e,v,"depth",s->depth);
         flag(e,v,"evaluated",i<e->processed);
         if(s->parent!=NO_INDEX){num(e,v,"parent_state_index",s->parent);num(e,v,"parent_formal_index",s->parent_formal);}
         if(s->edge!=NO_INDEX)num(e,v,"edge_index",s->edge);
@@ -464,15 +543,18 @@ finish:
     V *budgets=obj(e);num(e,budgets,"max_hops",request.max_hops);num(e,budgets,"max_paths",request.max_paths);
     num(e,budgets,"max_edge_checks",request.max_checks);num(e,budgets,"max_states",SF_TRACE_STATES);put(e,e->result,"budgets",budgets);
     /* Hash the request identity, not timing/counter-dependent search results. */
-    V *identity=obj(e);text(e,identity,"schema",SF_TRACE_SCHEMA);text(e,identity,"rule",SF_TRACE_RULE);
+    V *identity=obj(e);text(e,identity,"schema",argument_mode?SF_ARGUMENT_TRACE_SCHEMA:SF_TRACE_SCHEMA);
+    if(argument_mode)num(e,identity,"argument_index",argument_index);else text(e,identity,"rule",SF_TRACE_RULE);
     text(e,identity,"rule_revision","1");text(e,identity,"snapshot",request.operation.snapshot_id);
     text(e,identity,"build",SF_BUILD_ID);put(e,identity,"root",anchor(e,root));put(e,identity,"budgets",copy(e,budgets));
     V *files=arr(e);for(size_t i=0;i<request.scope_count;i++){V *f=obj(e);text(e,f,"path",sorted[i].path);text(e,f,"sha256",sorted[i].sha256);add(e,files,f);}put(e,identity,"scope",files);
-    text(e,identity,"mapper_path",request.operation.mapper->path);text(e,identity,"mapper_sha256",request.operation.mapper->sha256);
-    text(e,identity,"mapping_format",request.operation.annotation_sql?"annotation":"xml");
+    if(!argument_mode) {
+        text(e,identity,"mapper_path",request.operation.mapper->path);text(e,identity,"mapper_sha256",request.operation.mapper->sha256);
+        text(e,identity,"mapping_format",request.operation.annotation_sql?"annotation":"xml");
+    }
     if(request.operation.xml){text(e,identity,"mapping_path",request.operation.xml->path);text(e,identity,"mapping_sha256",request.operation.xml->sha256);}
     size_t length=0;char *raw=yyjson_mut_val_write(identity,0,&length),id[65];
-    if(!raw)e->error="out_of_memory";else{cbm_sha256_hex(raw,length,id);free(raw);text(e,e->result,"trace_id",id);}
+    if(!raw)e->error="out_of_memory";else{cbm_sha256_hex(raw,length,id);free(raw);text(e,e->result,argument_mode?"query_id":"trace_id",id);}
     raw=yyjson_mut_val_write(e->result,0,&length);
     if(!raw)e->error="out_of_memory";else{free(raw);if(length>SF_MAX_OUTPUT)e->error="trace_output_limit_exceeded";}
     if(!e->error)*result=e->result;
@@ -482,4 +564,11 @@ done:
     for(size_t i=0;i<e->nfiles;i++){if(e->files[i].entries)yyjson_doc_free(e->files[i].entries);if(e->files[i].tree)ts_tree_delete(e->files[i].tree);sf_document_free(&e->files[i].doc);}
     if(!error)error=e->error;
     free(e);return error;
+}
+
+const char *sf_trace_source_to_sink(const sf_trace_request *request,yyjson_mut_doc *output,V **result) {
+    return trace_query(request,false,0,output,result);
+}
+const char *sf_trace_argument_origins(const sf_trace_request *request,size_t argument_index,yyjson_mut_doc *output,V **result) {
+    return trace_query(request,true,argument_index,output,result);
 }

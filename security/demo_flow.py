@@ -122,7 +122,8 @@ def run_case(binary: Path, overwrite: bool) -> dict:
                                           "clientInfo": {"name": "cbm-sec-release-demo", "version": "1"}})
                 client.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
                 tools = client.rpc("tools/list", {})["tools"]
-                require({t["name"] for t in tools} == {"get_snapshot_info", "list_snapshot_files", "query_security_facts", "get_security_evidence", "read_snapshot_source", "inspect_operation_context", "resolve_code_location", "query_entry_points", "inspect_entry_security", "trace_source_to_sink"}, "Unexpected tool set")
+                require({t["name"] for t in tools} == {"get_snapshot_info", "list_snapshot_files", "query_security_facts", "get_security_evidence", "read_snapshot_source", "inspect_operation_context", "resolve_code_location", "query_entry_points", "inspect_entry_security", "trace_source_to_sink", "query_resource_operations", "trace_argument_origins"}, "Unexpected tool set")
+                require(len(tools) == 12, "Unexpected tool count or duplicate tool name")
                 common = {"snapshot_id": snapshot_id}
                 listing = client.tool("list_snapshot_files", common)
                 require(listing["total"] == len(sources), "Fixture scope mismatch")

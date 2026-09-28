@@ -227,7 +227,7 @@ static value *argument_origin(context *c, const sf_operation_source *s, const no
     return r;
 }
 static value *java_context(context *c, const sf_operation_source *s, const nodes *all,
-                           TSNode call, TSNode method, value **arguments) {
+                           TSNode call, TSNode method, value **arguments, bool local_analysis) {
     value *r = obj(c), *params = arr(c), *assignments = arr(c), *conditions = arr(c), *exits = arr(c);
     value *fields = arr(c), *declarations = arr(c);
     set(c, r, "method", ref(c, s, method));
@@ -244,7 +244,14 @@ static value *java_context(context *c, const sf_operation_source *s, const nodes
     }
     *arguments = arr(c);
     for (uint32_t i = 0; i < c->request->call->argument_count && i < OP_PARAMS; i++) {
-        value *v = argument_origin(c, s, all, method, p, count, c->request->call->arguments[i]);
+        value *v;
+        if (local_analysis) v = argument_origin(c, s, all, method, p, count, c->request->call->arguments[i]);
+        else {
+            v = obj(c);
+            sf_span span = c->request->call->arguments[i];
+            set(c, v, "source", reference(c, s, span.start, span.end));
+            text(c, v, "origin", "not_requested");
+        }
         num(c, v, "index", i); add(c, *arguments, v);
     }
     if (c->request->call->argument_total > OP_PARAMS) c->limited = true;
@@ -816,7 +823,7 @@ done:
     if (mt) ts_tree_delete(mt);
     free(mn); free(xn);
 }
-const char *sf_inspect_operation(const sf_operation_request *request, yyjson_mut_doc *output, value **result) {
+static const char *inspect_operation(const sf_operation_request *request, yyjson_mut_doc *output, value **result, bool local_analysis) {
     if (!result) return "invalid_arguments";
     *result = NULL;
     if (!request || !output || !request->caller || !request->call || !request->snapshot_id ||
@@ -836,14 +843,19 @@ const char *sf_inspect_operation(const sf_operation_request *request, yyjson_mut
     TSNode method = owner_method(call);
     if (ts_node_is_null(call) || ts_node_is_null(method)) { ts_tree_delete(tree); free(all); return "unsupported_operation_anchor"; }
     value *r = obj(&c), *arguments = NULL;
-    text(&c, r, "schema", "cbm.operation-context.v1"); text(&c, r, "analysis_id", request->caller->analysis_id);
+    text(&c, r, "schema", local_analysis ? "cbm.operation-context.v1" : "cbm.operation-structure.v1"); text(&c, r, "analysis_id", request->caller->analysis_id);
     text(&c, r, "call_id", request->call_id); text(&c, r, "basis", "bounded_syntax_and_explicit_mapping_candidates");
     text(&c, r, "authorization_verdict", "not_evaluated"); text(&c, r, "business_policy", "not_supplied_or_inferred");
     set(&c, r, "call", ref(&c, &source, call)); set(&c, r, "receiver", ref(&c, &source, sf_field(call, "object")));
-    set(&c, r, "java_context", java_context(&c, &source, all, call, method, &arguments));
+    set(&c, r, "java_context", java_context(&c, &source, all, call, method, &arguments, local_analysis));
     set(&c, r, "arguments", arguments); set(&c, r, "gaps", c.gaps);
-    const char *local_error = sf_attach_local_flow(request->caller, method, call, output, r);
-    if (local_error) c.error = local_error;
+    if (local_analysis) {
+        const char *local_error = sf_attach_local_flow(request->caller, method, call, output, r);
+        if (local_error) c.error = local_error;
+    } else {
+        text(&c, r, "analysis_scope", "structure_and_mapping_only");
+        text(&c, r, "local_value_flow_status", "not_requested");
+    }
     mybatis_context(&c, &source, all, call, method, r);
     gap(&c, "identity_trust_and_object_authorization_not_proved");
     gap(&c, "no_general_interprocedural_or_heap_solver");
@@ -856,4 +868,15 @@ const char *sf_inspect_operation(const sf_operation_request *request, yyjson_mut
     if (c.error) return c.error;
     *result = r;
     return NULL;
+}
+
+/* Both entry points use the same target and template checks. Structure queries
+ * intentionally do not invoke local-flow or return-summary evaluation. */
+const char *sf_inspect_operation(const sf_operation_request *request,
+                                yyjson_mut_doc *output, value **result) {
+    return inspect_operation(request, output, result, true);
+}
+const char *sf_inspect_operation_structure(const sf_operation_request *request,
+                                          yyjson_mut_doc *output, value **result) {
+    return inspect_operation(request, output, result, false);
 }
