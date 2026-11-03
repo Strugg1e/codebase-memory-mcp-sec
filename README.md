@@ -4,7 +4,9 @@
 
 CBM Sec 帮助审计 Agent 查找入口、理解安全配置、核对参数传播和数据操作。它负责回答“代码里有什么、这些值怎样关联、还缺哪些材料”；宿主平台负责提出威胁假设、组织独立验证和生成漏洞报告。
 
-> **版本说明**：默认 `main` 是 CBM Sec 的开发入口，包含安全源码、中文文档和目录整理，程序版本仍为 `0.14.0-dev`。合入主分支不等于发布稳定版。历史 [v0.6 预览包](https://github.com/Strugg1e/codebase-memory-mcp-sec/releases/tag/cbm-sec-v0.6.0-preview.1) 不包含后续开发能力。请以实际提交、构建编号和能力表为准。
+- **开发版本**：默认 `main`，程序版本为 `0.14.0-dev`。能力以本分支的代码、构建编号和能力表为准。
+- **历史预览包**：[v0.6 Preview 1](https://github.com/Strugg1e/codebase-memory-mcp-sec/releases/tag/cbm-sec-v0.6.0-preview.1)，不包含后续开发能力，不是稳定版。
+- **后续候选**：[v0.15 整合草稿 PR #5](https://github.com/Strugg1e/codebase-memory-mcp-sec/pull/5)。草稿中的功能不属于当前 `main` 或已发布预览包。详见[交付状态](docs/development/status.md)。
 
 [快速开始](docs/getting-started.md) · [工具与能力](docs/tools.md) · [架构与目录](docs/development/repository-layout.md) · [贡献指南](CONTRIBUTING.md) · [文档索引](docs/README.md)
 
@@ -13,12 +15,12 @@ CBM Sec 帮助审计 Agent 查找入口、理解安全配置、核对参数传�
 | 审计任务 | CBM Sec 提供的材料 |
 |---|---|
 | 项目侦查 | 源码文件、声明、调用现场；受支持的 Spring MVC 入口、输入绑定和相关控制声明 |
-| 威胁建模与提出假设 | 有出处的程序和框架材料，供 Agent 解释资产、边界及业务要求；不把推断写成事实 |
+| 威胁建模 | 有出处的程序和框架材料，供 Agent 解释资产、边界及业务要求并提出假设；不把推断写成事实 |
 | 假设验证 | 指定操作的参数来源、局部值流、返回值摘要、MyBatis 模板，以及 Spring Security 配置关系 |
 | 自动路径调查 | 从选定的 MyBatis 文本替换参数出发，在给定范围中自动寻找上游请求来源 |
 | 证据复核 | 固定源码版本、文件哈希、字节位置、关系前提和未完成项；可以回取原文 |
 
-在你的双循环中，它同时服务**“找出合理且可验证的命题”**和**“寻找支持或推翻命题的证据”**。图查询和程序关系不是最终安全结论。
+它既辅助提出合理且可验证的命题，也辅助查找支持或推翻命题的证据。图查询和程序关系不是最终安全结论。
 
 ## 快速开始
 
